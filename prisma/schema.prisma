@@ -22,6 +22,8 @@ model Venta {
   estado           String         @default("PENDIENTE") // PENDIENTE, PAGADA, CANCELADA
   total            Float
   descuento_total  Float          @default(0)
+
+  vendedor_nombre  String
   
   created_at       DateTime       @default(now())
   updated_at       DateTime       @updatedAt

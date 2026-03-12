@@ -13,6 +13,7 @@ interface PagoInput {
 }
 
 interface CreateComandaBody {
+  vendedor_nombre: string;
   descuento_total: number;
   detalles: DetalleInput[];
 }
@@ -31,7 +32,7 @@ export async function createComanda(
   reply: FastifyReply
 ) {
   try {
-    const { descuento_total, detalles } = request.body;
+    const { vendedor_nombre, descuento_total, detalles } = request.body;
 
     const subtotalBruto = detalles.reduce(
       (sum, d) => sum + d.cantidad * d.precio_unitario_historico,
@@ -43,6 +44,7 @@ export async function createComanda(
       const nuevaVenta = await tx.venta.create({
         data: {
           estado: 'PENDIENTE',
+          vendedor_nombre,
           total,
           descuento_total,
         },
