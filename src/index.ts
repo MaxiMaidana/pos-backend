@@ -5,6 +5,7 @@ import { productoRoutes } from './routes/producto.routes.js';
 import { ventaRoutes } from './routes/venta.routes.js';
 import { cajaRoutes } from './routes/caja.routes.js';
 import { dashboardRoutes } from './routes/dashboard.routes.js';
+import { syncRoutes } from './routes/sync.routes.js';
 import { syncVentasToCloud } from './services/sync.service.js';
 
 const SYNC_INTERVAL_MS = 60_000;
@@ -13,13 +14,14 @@ const fastify = Fastify({ logger: true });
 
 const start = async () => {
   try {
-    await fastify.register(cors, { origin: true, methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']});
+    await fastify.register(cors, { origin: true, methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']});
     await fastify.register(helmet);
 
     await fastify.register(productoRoutes, { prefix: '/api' });
     await fastify.register(ventaRoutes, { prefix: '/api' });
     await fastify.register(cajaRoutes, { prefix: '/api' });
     await fastify.register(dashboardRoutes, { prefix: '/api' });
+    await fastify.register(syncRoutes,      { prefix: '/api' });
 
     fastify.get('/', async (_request, _reply) => {
       return { status: 'ok', message: 'POS Edge Sync API funcionando' };

@@ -140,15 +140,23 @@ export async function getVentas(
   reply: FastifyReply
 ) {
   try {
-    const { estado, fecha, vendedor_nombre } = request.query as {
+    const { estado, fecha, vendedor_nombre, sesion_id } = request.query as {
       estado?:          string;
       fecha?:           string;
       vendedor_nombre?: string;
+      sesion_id?:       string;
     };
 
     const where: Prisma.VentaWhereInput = {
-      ...(estado          && { estado }),
+      // Si viene sesion_id sin estado explícito, devolvemos PAGADA y ANULADA
+      // (las PENDIENTE no tienen sesion_id asignado todavía)
+      estado: estado
+        ? estado
+        : sesion_id
+          ? { in: ['PAGADA', 'ANULADA'] }
+          : undefined,
       ...(vendedor_nombre && { vendedor_nombre: { contains: vendedor_nombre } }),
+      ...(sesion_id       && { sesion_id }),
       ...(fecha           && {
         created_at: {
           gte: new Date(`${fecha}T00:00:00`),
@@ -165,6 +173,9 @@ export async function getVentas(
           include: { producto: true },
         },
         pagos: true,
+        sesion: {
+          include: { caja: true },
+        },
       },
     });
 
@@ -176,11 +187,12 @@ export async function getVentas(
 }
 
 export async function anularVenta(
-  request: FastifyRequest<{ Params: VentaParams }>,
+  request: FastifyRequest<{ Params: VentaParams; Body: { sesion_id?: string } }>,
   reply: FastifyReply
 ) {
   try {
     const { id } = request.params;
+    const { sesion_id } = request.body ?? {};
 
     const venta = await prisma.venta.findUnique({
       where: { id },
@@ -197,7 +209,6 @@ export async function anularVenta(
     }
 
     await prisma.$transaction(async (tx) => {
-      // Devolvemos el stock de cada producto a la estantería
       for (const detalle of venta.detalles) {
         await tx.producto.update({
           where: { id: detalle.producto_id },
@@ -205,11 +216,11 @@ export async function anularVenta(
         });
       }
 
-      // Marcamos la venta como ANULADA (sin borrado físico)
-      await tx.venta.update({
-        where: { id },
-        data: { estado: 'ANULADA' },
-      });
+      // Construimos data explícitamente para evitar que el spread con && ignore valores falsy
+      const dataToUpdate: Prisma.VentaUpdateInput = { estado: 'ANULADA' };
+      if (sesion_id) dataToUpdate.sesion = { connect: { id: sesion_id } };
+
+      await tx.venta.update({ where: { id }, data: dataToUpdate });
     });
 
     return reply.status(200).send({ message: `Venta ${id} anulada correctamente.` });

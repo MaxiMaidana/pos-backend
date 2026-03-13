@@ -6,5 +6,6 @@ export async function ventaRoutes(fastify: FastifyInstance) {
   fastify.post('/ventas', createComanda);
   fastify.post('/ventas/:id/cobrar', cobrarVenta);
   fastify.post('/ventas/:id/cancelar', cancelarVenta);
-  fastify.delete('/ventas/:id', anularVenta);
+  fastify.patch('/ventas/:id', anularVenta);  // PATCH para anular (soft-delete con sesion_id)
+  fastify.delete('/ventas/:id', anularVenta); // DELETE mantenido por compatibilidad
 }
