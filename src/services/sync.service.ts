@@ -26,7 +26,10 @@ export async function syncVentasToCloud(): Promise<void> {
         if (eCaja) throw new Error(`Caja upsert: ${eCaja.message}`);
 
         const { caja: _caja, ...sesionData } = venta.sesion;
-        const { error: eSesion } = await supabase.from('SesionCaja').upsert(sesionData);
+        const { error: eSesion } = await supabase.from('SesionCaja').upsert({
+          ...sesionData,
+          cajero_nombre: sesionData.cajero_nombre || 'Cajero Desconocido',
+        });
         if (eSesion) throw new Error(`SesionCaja upsert: ${eSesion.message}`);
       }
 
@@ -40,13 +43,14 @@ export async function syncVentasToCloud(): Promise<void> {
 
       // Paso C: Venta, detalles y pagos
       const { error: eVenta } = await supabase.from('Venta').upsert({
-        id: venta.id,
-        estado: venta.estado,
-        total: venta.total,
+        id:              venta.id,
+        estado:          venta.estado,
+        total:           venta.total,
         descuento_total: venta.descuento_total,
-        created_at: venta.created_at,
-        updated_at: venta.updated_at,
-        sesion_id: venta.sesion_id,
+        vendedor_nombre: venta.vendedor_nombre || 'Vendedor Desconocido',
+        created_at:      venta.created_at,
+        updated_at:      venta.updated_at,
+        sesion_id:       venta.sesion_id,
       });
       if (eVenta) throw new Error(`Venta upsert: ${eVenta.message}`);
 

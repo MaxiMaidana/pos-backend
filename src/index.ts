@@ -4,6 +4,7 @@ import helmet from '@fastify/helmet';
 import { productoRoutes } from './routes/producto.routes.js';
 import { ventaRoutes } from './routes/venta.routes.js';
 import { cajaRoutes } from './routes/caja.routes.js';
+import { dashboardRoutes } from './routes/dashboard.routes.js';
 import { syncVentasToCloud } from './services/sync.service.js';
 
 const SYNC_INTERVAL_MS = 60_000;
@@ -18,6 +19,7 @@ const start = async () => {
     await fastify.register(productoRoutes, { prefix: '/api' });
     await fastify.register(ventaRoutes, { prefix: '/api' });
     await fastify.register(cajaRoutes, { prefix: '/api' });
+    await fastify.register(dashboardRoutes, { prefix: '/api' });
 
     fastify.get('/', async (_request, _reply) => {
       return { status: 'ok', message: 'POS Edge Sync API funcionando' };

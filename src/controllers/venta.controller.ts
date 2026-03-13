@@ -1,5 +1,6 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../db/prisma.js';
+import type { Prisma } from '@prisma/client';
 
 interface DetalleInput {
   producto_id: string;
@@ -139,10 +140,25 @@ export async function getVentas(
   reply: FastifyReply
 ) {
   try {
-    const { estado } = request.query as { estado?: string };
+    const { estado, fecha, vendedor_nombre } = request.query as {
+      estado?:          string;
+      fecha?:           string;
+      vendedor_nombre?: string;
+    };
+
+    const where: Prisma.VentaWhereInput = {
+      ...(estado          && { estado }),
+      ...(vendedor_nombre && { vendedor_nombre: { contains: vendedor_nombre } }),
+      ...(fecha           && {
+        created_at: {
+          gte: new Date(`${fecha}T00:00:00`),
+          lte: new Date(`${fecha}T23:59:59.999`),
+        },
+      }),
+    };
 
     const ventas = await prisma.venta.findMany({
-      where: estado ? { estado } : undefined,
+      where,
       orderBy: { created_at: 'desc' },
       include: {
         detalles: {
