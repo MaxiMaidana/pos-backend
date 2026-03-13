@@ -21,10 +21,11 @@ interface ProductoParams {
 }
 
 interface GetProductosQuery {
-  page?: string;
-  limit?: string;
-  search?: string;
-  stockBajo?: string;
+  page?:        string;
+  limit?:       string;
+  search?:      string;
+  stockBajo?:   string;
+  soloActivos?: string;
 }
 
 export async function getProductos(
@@ -36,10 +37,11 @@ export async function getProductos(
     const limit = Math.max(1, parseInt(request.query.limit ?? '20', 10));
     const skip  = (page - 1) * limit;
 
-    const { search, stockBajo } = request.query;
+    const { search, stockBajo, soloActivos } = request.query;
 
     const where: Prisma.ProductoWhereInput = {
-      activo: true,
+      // soloActivos=true  → solo activos (POS)  |  omitido o false → todos (inventario)
+      ...(soloActivos === 'true' && { activo: true }),
       ...(search && {
         OR: [
           { nombre:        { contains: search } },
@@ -138,5 +140,29 @@ export async function deleteProducto(
   } catch (error) {
     request.log.error(error);
     return reply.status(500).send({ error: 'Error al eliminar el producto' });
+  }
+}
+
+export async function toggleActivo(
+  request: FastifyRequest<{ Params: ProductoParams }>,
+  reply: FastifyReply
+) {
+  try {
+    const { id } = request.params;
+
+    const producto = await prisma.producto.findUnique({ where: { id } });
+    if (!producto) {
+      return reply.status(404).send({ error: 'Producto no encontrado' });
+    }
+
+    const actualizado = await prisma.producto.update({
+      where: { id },
+      data:  { activo: !producto.activo },
+    });
+
+    return reply.send(actualizado);
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({ error: 'Error al cambiar el estado del producto' });
   }
 }
