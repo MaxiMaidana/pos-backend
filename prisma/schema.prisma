@@ -19,7 +19,7 @@ model Producto {
 
 model Venta {
   id               String         @id @default(uuid())
-  estado           String         @default("PENDIENTE") // PENDIENTE, PAGADA, CANCELADA
+  estado           String         @default("PENDIENTE") // PENDIENTE, PAGADA, CANCELADA, ANULADA
   total            Float
   descuento_total  Float          @default(0)
 

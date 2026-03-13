@@ -1,5 +1,6 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../db/prisma.js';
+import type { Prisma } from '@prisma/client';
 
 interface CreateProductoBody {
   nombre: string;
@@ -19,15 +20,54 @@ interface ProductoParams {
   id: string;
 }
 
+interface GetProductosQuery {
+  page?: string;
+  limit?: string;
+  search?: string;
+  stockBajo?: string;
+}
+
 export async function getProductos(
-  request: FastifyRequest,
+  request: FastifyRequest<{ Querystring: GetProductosQuery }>,
   reply: FastifyReply
 ) {
   try {
-    const productos = await prisma.producto.findMany({
-      where: { activo: true },
+    const page  = Math.max(1, parseInt(request.query.page  ?? '1',  10));
+    const limit = Math.max(1, parseInt(request.query.limit ?? '20', 10));
+    const skip  = (page - 1) * limit;
+
+    const { search, stockBajo } = request.query;
+
+    const where: Prisma.ProductoWhereInput = {
+      activo: true,
+      ...(search && {
+        OR: [
+          { nombre:        { contains: search } },
+          { codigo_barras: { contains: search } },
+        ],
+      }),
+      ...(stockBajo === 'true' && { stock: { lte: 5 } }),
+    };
+
+    const [total, data] = await prisma.$transaction([
+      prisma.producto.count({ where }),
+      prisma.producto.findMany({
+        where,
+        skip,
+        take:    limit,
+        orderBy: { nombre: 'asc' },
+      }),
+    ]);
+
+    return reply.send({
+      data,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
     });
-    return reply.send(productos);
   } catch (error) {
     request.log.error(error);
     return reply.status(500).send({ error: 'Error al obtener productos' });

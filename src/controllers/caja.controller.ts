@@ -163,6 +163,19 @@ export async function cerrarCaja(
   }
 }
 
+export async function getCajas(
+  request: FastifyRequest,
+  reply: FastifyReply
+) {
+  try {
+    const cajas = await prisma.caja.findMany();
+    return reply.status(200).send(cajas);
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({ error: 'Error al obtener las cajas' });
+  }
+}
+
 export async function estadoCaja(
   request: FastifyRequest<{ Params: CajaParams }>,
   reply: FastifyReply

@@ -12,7 +12,7 @@ const fastify = Fastify({ logger: true });
 
 const start = async () => {
   try {
-    await fastify.register(cors, { origin: true });
+    await fastify.register(cors, { origin: true, methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']});
     await fastify.register(helmet);
 
     await fastify.register(productoRoutes, { prefix: '/api' });

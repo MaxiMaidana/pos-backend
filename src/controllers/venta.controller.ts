@@ -159,6 +159,50 @@ export async function getVentas(
   }
 }
 
+export async function anularVenta(
+  request: FastifyRequest<{ Params: VentaParams }>,
+  reply: FastifyReply
+) {
+  try {
+    const { id } = request.params;
+
+    const venta = await prisma.venta.findUnique({
+      where: { id },
+      include: { detalles: true },
+    });
+
+    if (!venta) {
+      return reply.status(404).send({ error: 'Venta no encontrada' });
+    }
+    if (venta.estado !== 'PENDIENTE') {
+      return reply
+        .status(400)
+        .send({ error: `Solo se pueden anular ventas en estado PENDIENTE. Estado actual: ${venta.estado}` });
+    }
+
+    await prisma.$transaction(async (tx) => {
+      // Devolvemos el stock de cada producto a la estantería
+      for (const detalle of venta.detalles) {
+        await tx.producto.update({
+          where: { id: detalle.producto_id },
+          data: { stock: { increment: detalle.cantidad } },
+        });
+      }
+
+      // Marcamos la venta como ANULADA (sin borrado físico)
+      await tx.venta.update({
+        where: { id },
+        data: { estado: 'ANULADA' },
+      });
+    });
+
+    return reply.status(200).send({ message: `Venta ${id} anulada correctamente.` });
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({ error: 'Error al anular la venta' });
+  }
+}
+
 export async function cancelarVenta(
   request: FastifyRequest<{ Params: VentaParams }>,
   reply: FastifyReply
