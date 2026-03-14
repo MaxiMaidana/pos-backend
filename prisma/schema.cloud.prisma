@@ -1,0 +1,87 @@
+// ──────────────────────────────────────────────────────────────────────────────
+// Schema para el entorno CLOUD (Render + Supabase/PostgreSQL).
+// NO modificar provider ni url — son los únicos cambios respecto al schema local.
+//
+// Uso:  prisma generate --schema=./prisma/schema.cloud.prisma
+// ──────────────────────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Producto {
+  id              String         @id @default(uuid())
+  codigo_barras   String?        @unique
+  nombre          String
+  precio_actual   Float
+  stock           Int
+  activo          Boolean        @default(true)
+  detalles_ventas DetalleVenta[]
+}
+
+model Venta {
+  id              String   @id @default(uuid())
+  estado          String   @default("PENDIENTE") // PENDIENTE, PAGADA, CANCELADA, ANULADA
+  total           Float
+  descuento_total Float    @default(0)
+
+  vendedor_nombre String
+
+  created_at DateTime  @default(now())
+  updated_at DateTime  @updatedAt
+  synced_at  DateTime?
+
+  detalles DetalleVenta[]
+  pagos    Pago[]
+
+  sesion_id String?
+  sesion    SesionCaja? @relation(fields: [sesion_id], references: [id])
+}
+
+model DetalleVenta {
+  id                        String @id @default(uuid())
+  venta_id                  String
+  producto_id               String
+  cantidad                  Int
+  precio_unitario_historico Float
+  subtotal                  Float
+
+  venta    Venta    @relation(fields: [venta_id], references: [id])
+  producto Producto @relation(fields: [producto_id], references: [id])
+}
+
+model Pago {
+  id       String @id @default(uuid())
+  venta_id String
+  metodo   String // EFECTIVO, TARJETA, MERCADOPAGO, TRANSFERENCIA
+  monto    Float
+
+  venta Venta @relation(fields: [venta_id], references: [id])
+}
+
+model SesionCaja {
+  id             String    @id @default(uuid())
+  cajero_nombre  String
+  fecha_apertura DateTime  @default(now())
+  fecha_cierre   DateTime?
+  monto_inicial  Float
+  estado         String    @default("ABIERTA") // ABIERTA, CERRADA
+
+  monto_efectivo_cierre Float? // Lo que el cajero contó físicamente
+  diferencia            Float? // Positivo = Sobró plata / Negativo = Faltó plata
+
+  ventas  Venta[]
+  caja_id String
+  caja    Caja    @relation(fields: [caja_id], references: [id])
+}
+
+model Caja {
+  id       String       @id @default(uuid())
+  nombre   String       @unique // Ej: "Caja 1", "Caja 2"
+  sesiones SesionCaja[]
+}
