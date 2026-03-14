@@ -7,6 +7,8 @@ import { cajaRoutes } from './routes/caja.routes.js';
 import { dashboardRoutes } from './routes/dashboard.routes.js';
 import { syncRoutes } from './routes/sync.routes.js';
 import { syncVentasToCloud } from './services/sync.service.js';
+import { authHook } from './plugins/auth.plugin.js';
+import { authRoutes } from './routes/auth.routes.js';
 
 const SYNC_INTERVAL_MS = 60_000;
 
@@ -14,15 +16,31 @@ const fastify = Fastify({ logger: true });
 
 const start = async () => {
   try {
-    await fastify.register(cors, { origin: true, methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']});
+    await fastify.register(cors, {
+      origin:         true,
+      credentials:    true,
+      methods:        ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization'],
+    });
     await fastify.register(helmet);
 
-    await fastify.register(productoRoutes, { prefix: '/api' });
-    await fastify.register(ventaRoutes, { prefix: '/api' });
-    await fastify.register(cajaRoutes, { prefix: '/api' });
-    await fastify.register(dashboardRoutes, { prefix: '/api' });
-    await fastify.register(syncRoutes,      { prefix: '/api' });
+    // ── Ruta pública de autenticación (sin authHook) ─────────────────────────
+    await fastify.register(authRoutes);
 
+    // ── Rutas protegidas (/api/*) ─────────────────────────────────────────────
+    // El plugin encapsulado garantiza que el hook SOLO aplica a estas rutas,
+    // sin afectar al health-check público GET /
+    fastify.register(async (apiScope) => {
+      apiScope.addHook('onRequest', authHook);
+
+      await apiScope.register(productoRoutes,  { prefix: '/api' });
+      await apiScope.register(ventaRoutes,     { prefix: '/api' });
+      await apiScope.register(cajaRoutes,      { prefix: '/api' });
+      await apiScope.register(dashboardRoutes, { prefix: '/api' });
+      await apiScope.register(syncRoutes,      { prefix: '/api' });
+    });
+
+    // ── Ruta pública ──────────────────────────────────────────────────────────
     fastify.get('/', async (_request, _reply) => {
       return { status: 'ok', message: 'POS Edge Sync API funcionando' };
     });
