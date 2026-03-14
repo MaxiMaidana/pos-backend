@@ -17,36 +17,35 @@ const fastify = Fastify({ logger: true });
 
 const start = async () => {
   try {
-    // Orígenes permitidos: variable de entorno o fallback a localhost en desarrollo
-    const allowedOrigins = process.env.FRONTEND_URL
-      ? process.env.FRONTEND_URL.split(',')
-      : ['http://localhost:5173'];
-
+    // ── CORS "Modo Dios" ──────────────────────────────────────────────────────
+    // Acepta cualquier origen, cualquier header. Ideal para depurar móviles.
+    // TODO: reemplazar por la configuración restrictiva antes de ir a producción.
     await fastify.register(cors, {
-      origin: (origin, cb) => {
-        // Peticiones sin origen (Postman, curl, apps móviles nativas) siempre pasan
-        if (!origin || allowedOrigins.includes(origin)) {
-          cb(null, true);
-        } else {
-          cb(new Error(`Origen no permitido por CORS: ${origin}`), false);
-        }
-      },
+      origin:            true,          // refleja el Origin del request en Allow-Origin
       credentials:       true,
       methods:           ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders:    ['Content-Type', 'Authorization'],
+      allowedHeaders:    ['*'],         // acepta cualquier header que mande el cliente
       exposedHeaders:    ['Authorization'],
-      // CRÍTICO para iOS: responde 204 a OPTIONS en CUALQUIER ruta,
-      // no solo en las que tienen handler registrado.
-      strictPreflight:   false,
+      strictPreflight:   false,         // responde 204 a OPTIONS en CUALQUIER ruta
       preflight:         true,
       preflightContinue: false,
     });
 
-    // Helmet va DESPUÉS de CORS y con crossOriginResourcePolicy desactivado
-    // para que no sobreescriba los headers de CORS en las respuestas preflight.
+    // Helmet con las políticas de cross-origin desactivadas para que no
+    // sobreescriba los headers Access-Control-* en errores y preflights.
     await fastify.register(helmet, {
       crossOriginResourcePolicy: false,
       crossOriginOpenerPolicy:   false,
+    });
+
+    // Asegura que los errores (401, 403, 500) también devuelvan headers CORS.
+    // Sin esto, el browser interpreta las respuestas de error como "Network Error".
+    fastify.addHook('onSend', async (request, reply) => {
+      const origin = request.headers.origin;
+      if (origin) {
+        reply.header('Access-Control-Allow-Origin',      origin);
+        reply.header('Access-Control-Allow-Credentials', 'true');
+      }
     });
 
     // ── Ruta pública de autenticación (sin authHook) ─────────────────────────
