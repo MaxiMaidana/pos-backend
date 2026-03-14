@@ -31,12 +31,23 @@ const start = async () => {
           cb(new Error(`Origen no permitido por CORS: ${origin}`), false);
         }
       },
-      credentials:    true,
-      methods:        ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization'],
-      exposedHeaders: ['Authorization'],
+      credentials:       true,
+      methods:           ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders:    ['Content-Type', 'Authorization'],
+      exposedHeaders:    ['Authorization'],
+      // CRÍTICO para iOS: responde 204 a OPTIONS en CUALQUIER ruta,
+      // no solo en las que tienen handler registrado.
+      strictPreflight:   false,
+      preflight:         true,
+      preflightContinue: false,
     });
-    await fastify.register(helmet);
+
+    // Helmet va DESPUÉS de CORS y con crossOriginResourcePolicy desactivado
+    // para que no sobreescriba los headers de CORS en las respuestas preflight.
+    await fastify.register(helmet, {
+      crossOriginResourcePolicy: false,
+      crossOriginOpenerPolicy:   false,
+    });
 
     // ── Ruta pública de autenticación (sin authHook) ─────────────────────────
     await fastify.register(authRoutes);
