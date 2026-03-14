@@ -1,7 +1,10 @@
 import 'dotenv/config';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
+import staticFiles from '@fastify/static';
 import { productoRoutes } from './routes/producto.routes.js';
 import { ventaRoutes } from './routes/venta.routes.js';
 import { cajaRoutes } from './routes/caja.routes.js';
@@ -64,9 +67,21 @@ const start = async () => {
       await apiScope.register(syncRoutes,      { prefix: '/api' });
     });
 
-    // ── Ruta pública ──────────────────────────────────────────────────────────
-    fastify.get('/', async (_request, _reply) => {
-      return { status: 'ok', message: 'POS Edge Sync API funcionando' };
+    // ── Archivos estáticos del frontend (dist/) ─────────────────────────────
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const distPath  = join(__dirname, '..', 'dist');
+
+    await fastify.register(staticFiles, {
+      root:       distPath,
+      prefix:     '/',
+      // No lanza error si el archivo no existe; lo manejamos con el wildcard
+      decorateReply: false,
+    });
+
+    // SPA fallback: cualquier ruta que no sea /api/* devuelve index.html
+    // para que React Router / Vue Router manejen la navegación del lado cliente.
+    fastify.setNotFoundHandler(async (_request, reply) => {
+      return reply.sendFile('index.html', distPath);
     });
 
     setInterval(() => { void syncVentasToCloud(); }, SYNC_INTERVAL_MS);
