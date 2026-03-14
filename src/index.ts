@@ -16,11 +16,24 @@ const fastify = Fastify({ logger: true });
 
 const start = async () => {
   try {
+    // Orígenes permitidos: variable de entorno o fallback a localhost en desarrollo
+    const allowedOrigins = process.env.FRONTEND_URL
+      ? process.env.FRONTEND_URL.split(',')
+      : ['http://localhost:5173'];
+
     await fastify.register(cors, {
-      origin:         true,
+      origin: (origin, cb) => {
+        // Peticiones sin origen (Postman, curl, apps móviles nativas) siempre pasan
+        if (!origin || allowedOrigins.includes(origin)) {
+          cb(null, true);
+        } else {
+          cb(new Error(`Origen no permitido por CORS: ${origin}`), false);
+        }
+      },
       credentials:    true,
       methods:        ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization'],
+      exposedHeaders: ['Authorization'],
     });
     await fastify.register(helmet);
 
