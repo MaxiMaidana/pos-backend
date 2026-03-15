@@ -53,6 +53,7 @@ model Pago {
   venta_id String
   metodo   String // EFECTIVO, TARJETA, MERCADOPAGO, TRANSFERENCIA
   monto    Float
+  cuotas   Int?
 
   venta    Venta  @relation(fields: [venta_id], references: [id])
 }

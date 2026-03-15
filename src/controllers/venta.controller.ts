@@ -10,7 +10,8 @@ interface DetalleInput {
 
 interface PagoInput {
   metodo: string;
-  monto: number;
+  monto:  number;
+  cuotas?: number;
 }
 
 interface CreateComandaBody {
@@ -81,6 +82,38 @@ export async function createComanda(
   }
 }
 
+// Recargos por cuotas con tarjeta de crédito
+const RECARGOS_POR_CUOTAS: Record<number, number> = {
+  1: 0.05,   //  5 %
+  2: 0.07,   //  7 %
+  3: 0.10,   // 10 %
+  6: 0.15,   // 15 %
+};
+
+function calcularTotalConRecargos(
+  totalBase: number,
+  pagos: PagoInput[]
+): number {
+  let recargosAcumulados = 0;
+
+  for (const pago of pagos) {
+    const esTarjetaCredito = pago.metodo === 'TARJETA_CREDITO';
+    if (!esTarjetaCredito) continue;
+
+    const cuotas          = pago.cuotas ?? 1;
+    const recargoDecimal  = RECARGOS_POR_CUOTAS[cuotas] ?? 0;
+
+    // Ingeniería inversa: el frontend ya envía monto CON recargo incluido.
+    // Extraemos el monto base para obtener el recargo real sin duplicarlo.
+    const montoBasePago       = pago.monto / (1 + recargoDecimal);
+    const recargoRealAplicado = pago.monto - montoBasePago;
+
+    recargosAcumulados += recargoRealAplicado;
+  }
+
+  return totalBase + recargosAcumulados;
+}
+
 export async function cobrarVenta(
   request: FastifyRequest<{ Params: VentaParams; Body: CobrarVentaBody }>,
   reply: FastifyReply
@@ -105,10 +138,14 @@ export async function cobrarVenta(
       return reply.status(400).send({ error: 'Esa caja no está abierta' });
     }
 
-    const totalPagado = pagos.reduce((sum, p) => sum + p.monto, 0);
-    if (Math.abs(totalPagado - venta.total) > 0.01) {
+    const totalPagado        = pagos.reduce((sum, p) => sum + p.monto, 0);
+    const totalConRecargos   = calcularTotalConRecargos(venta.total, pagos);
+    const hayRecargo         = Math.abs(totalConRecargos - venta.total) > 0.01;
+
+    // Validar que lo que manda el frontend coincide con el total esperado
+    if (Math.abs(totalPagado - totalConRecargos) > 0.01) {
       return reply.status(400).send({
-        error: `El total de pagos (${totalPagado}) no coincide con el total de la venta (${venta.total})`,
+        error: `El total de pagos (${totalPagado.toFixed(2)}) no coincide con el total esperado (${totalConRecargos.toFixed(2)})`,
       });
     }
 
@@ -116,14 +153,20 @@ export async function cobrarVenta(
       await tx.pago.createMany({
         data: pagos.map((p) => ({
           venta_id: id,
-          metodo: p.metodo,
-          monto: p.monto,
+          metodo:   p.metodo,
+          monto:    p.monto,
+          cuotas:   p.cuotas ?? 1,
         })),
       });
 
       return tx.venta.update({
         where: { id },
-        data: { estado: 'PAGADA', sesion_id: sesionAbierta.id },
+        data: {
+          estado:    'PAGADA',
+          sesion_id: sesionAbierta.id,
+          // Actualiza el total solo si hay recargo para mantener trazabilidad
+          ...(hayRecargo && { total: totalConRecargos }),
+        },
         include: { detalles: true, pagos: true },
       });
     });

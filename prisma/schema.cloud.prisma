@@ -11,7 +11,7 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+  url      = env("DATABASE_CLOUD_URL")
 }
 
 model Producto {
@@ -60,6 +60,7 @@ model Pago {
   venta_id String
   metodo   String // EFECTIVO, TARJETA, MERCADOPAGO, TRANSFERENCIA
   monto    Float
+  cuotas   Int?
 
   venta Venta @relation(fields: [venta_id], references: [id])
 }
