@@ -10,7 +10,7 @@ import { ventaRoutes } from './routes/venta.routes.js';
 import { cajaRoutes } from './routes/caja.routes.js';
 import { dashboardRoutes } from './routes/dashboard.routes.js';
 import { syncRoutes } from './routes/sync.routes.js';
-import { syncVentasToCloud } from './services/sync.service.js';
+import { syncVentasToCloud, syncProductosToCloud } from './services/sync.service.js';
 import { authHook } from './plugins/auth.plugin.js';
 import { authRoutes } from './routes/auth.routes.js';
 
@@ -84,7 +84,12 @@ const start = async () => {
       return reply.sendFile('index.html', distPath);
     });
 
-    setInterval(() => { void syncVentasToCloud(); }, SYNC_INTERVAL_MS);
+    setInterval(async () => {
+      console.info('[SYNC] 🔄 Iniciando ciclo de sincronización...');
+      await syncProductosToCloud(); // Productos primero (son dependencia de ventas)
+      await syncVentasToCloud();
+      console.info('[SYNC] 🏁 Ciclo de sincronización finalizado.');
+    }, SYNC_INTERVAL_MS);
     fastify.log.info(`☁️  Sync worker iniciado. Sincronizando cada ${SYNC_INTERVAL_MS / 1000}s.`);
 
     await fastify.listen({ port: 3000, host: '0.0.0.0' });

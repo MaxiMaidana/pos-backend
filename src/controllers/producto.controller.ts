@@ -40,6 +40,7 @@ export async function getProductos(
     const { search, stockBajo, soloActivos } = request.query;
 
     const where: Prisma.ProductoWhereInput = {
+      eliminado: false,
       // soloActivos=true  → solo activos (POS)  |  omitido o false → todos (inventario)
       ...(soloActivos === 'true' && { activo: true }),
       ...(search && {
@@ -89,6 +90,7 @@ export async function createProducto(
         precio_actual,
         stock,
         codigo_barras,
+        synced_at: null,
       },
     });
 
@@ -114,6 +116,7 @@ export async function updateProducto(
         ...(precio_actual !== undefined && { precio_actual }),
         ...(stock !== undefined && { stock }),
         ...(codigo_barras !== undefined && { codigo_barras }),
+        synced_at: null,
       },
     });
 
@@ -133,7 +136,7 @@ export async function deleteProducto(
 
     const producto = await prisma.producto.update({
       where: { id },
-      data: { activo: false },
+      data: { eliminado: true, synced_at: null },
     });
 
     return reply.send(producto);
@@ -157,7 +160,7 @@ export async function toggleActivo(
 
     const actualizado = await prisma.producto.update({
       where: { id },
-      data:  { activo: !producto.activo },
+      data:  { activo: !producto.activo, synced_at: null },
     });
 
     return reply.send(actualizado);

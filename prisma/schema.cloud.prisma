@@ -10,8 +10,9 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_CLOUD_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_CLOUD_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 model Producto {
@@ -21,6 +22,9 @@ model Producto {
   precio_actual   Float
   stock           Int
   activo          Boolean        @default(true)
+  eliminado       Boolean        @default(false)
+  updated_at      DateTime       @updatedAt @default(now())
+  synced_at       DateTime?
   detalles_ventas DetalleVenta[]
 }
 
@@ -35,6 +39,14 @@ model Venta {
   created_at DateTime  @default(now())
   updated_at DateTime  @updatedAt
   synced_at  DateTime?
+
+  // Campos para facturación electrónica (AFIP/ARCA)
+  estadoFacturacion String        @default("NO_APLICA") // NO_APLICA, PENDIENTE, FACTURADA, ERROR
+  cae               String?        // Código de Autorización Electrónico
+  vencimientoCae    String?
+  numeroFactura     Int?
+  tipoFactura       String?        // Ej: "C", "B", "A"
+  errorFacturacion  String?        // Descripción del error si fue rechazada por ARCA
 
   detalles DetalleVenta[]
   pagos    Pago[]
@@ -85,4 +97,13 @@ model Caja {
   id       String       @id @default(uuid())
   nombre   String       @unique // Ej: "Caja 1", "Caja 2"
   sesiones SesionCaja[]
+}
+
+model ConfiguracionTienda {
+  id                  Int     @id @default(1)
+  cuit                String
+  razonSocial         String
+  condicionFiscal     String  // MONOTRIBUTO, RESPONSABLE_INSCRIPTO
+  puntoVenta          Int
+  entornoProduccion   Boolean @default(false)
 }

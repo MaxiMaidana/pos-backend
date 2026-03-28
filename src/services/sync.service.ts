@@ -1,5 +1,64 @@
 import { prisma } from '../db/prisma.js';
 import { supabase } from '../db/supabase.js';
+import type { Producto } from '@prisma/client';
+
+export async function syncProductosToCloud(): Promise<void> {
+  let productos: Producto[] = [];
+
+  try {
+    // Raw SQL: synced_at IS NULL o updated_at > synced_at (Prisma no soporta comparación entre campos en where)
+    productos = await prisma.$queryRaw<Producto[]>`
+      SELECT * FROM Producto
+      WHERE synced_at IS NULL OR updated_at > synced_at
+    `;
+  } catch (err) {
+    console.error('[SYNC] ❌ ERROR CRÍTICO al leer productos pendientes desde la BD local:', err instanceof Error ? err.message : err);
+    return;
+  }
+
+  if (productos.length === 0) {
+    console.info('[SYNC] 💤 Productos: nada nuevo para sincronizar en este ciclo.');
+    return;
+  }
+
+  console.info(`[SYNC] 📦 Se encontraron ${productos.length} producto(s) pendientes de subir.`);
+
+  let exitosos = 0;
+
+  for (const producto of productos) {
+    try {
+      const { error } = await supabase.from('Producto').upsert({
+        id:            producto.id,
+        codigo_barras: producto.codigo_barras,
+        nombre:        producto.nombre,
+        precio_actual: producto.precio_actual,
+        stock:         producto.stock,
+        activo:        producto.activo,
+        eliminado:     producto.eliminado,
+        updated_at:    producto.updated_at,
+      });
+
+      if (error) throw new Error(error.message);
+
+      // $executeRaw evita que @updatedAt modifique updated_at y genere un bucle infinito.
+      // SET synced_at = updated_at garantiza igualdad exacta entre ambos campos.
+      await prisma.$executeRaw`
+        UPDATE "Producto" SET synced_at = updated_at WHERE id = ${producto.id}
+      `;
+
+      exitosos++;
+    } catch (err) {
+      console.error(`[SYNC] ❌ ERROR CRÍTICO al sincronizar producto "${producto.nombre}" (${producto.id}): ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  if (exitosos > 0) {
+    console.info(`[SYNC] ✅ ${exitosos} producto(s) sincronizados exitosamente.`);
+  }
+  if (exitosos < productos.length) {
+    console.warn(`[SYNC] ⚠️  ${productos.length - exitosos} producto(s) fallaron y se reintentarán en el próximo ciclo.`);
+  }
+}
 
 export async function syncVentasToCloud(): Promise<void> {
   const ventasPendientes = await prisma.venta.findMany({
@@ -9,11 +68,21 @@ export async function syncVentasToCloud(): Promise<void> {
       pagos: true,
       sesion: { include: { caja: true } },
     },
+  }).catch(err => {
+    console.error('[SYNC] ❌ ERROR CRÍTICO al leer ventas pendientes desde la BD local:', err instanceof Error ? err.message : err);
+    return null;
   });
 
-  if (ventasPendientes.length === 0) return;
+  if (!ventasPendientes) return;
 
-  console.log(`[Sync] Sincronizando ${ventasPendientes.length} venta(s)...`);
+  if (ventasPendientes.length === 0) {
+    console.info('[SYNC] 💤 Ventas: nada nuevo para sincronizar en este ciclo.');
+    return;
+  }
+
+  console.info(`[SYNC] 📦 Se encontraron ${ventasPendientes.length} venta(s) pendientes de subir.`);
+
+  let exitosos = 0;
 
   for (const venta of ventasPendientes) {
     try {
@@ -65,16 +134,22 @@ export async function syncVentasToCloud(): Promise<void> {
         if (ePago) throw new Error(`Pago upsert (${pago.id}): ${ePago.message}`);
       }
 
-      // Paso D: Marcar como sincronizada localmente
-      await prisma.venta.update({
-        where: { id: venta.id },
-        data: { synced_at: new Date() },
-      });
+      // Paso D: Marcar como sincronizada localmente.
+      // $executeRaw evita que @updatedAt modifique updated_at y genere un bucle infinito.
+      await prisma.$executeRaw`
+        UPDATE "Venta" SET synced_at = updated_at WHERE id = ${venta.id}
+      `;
 
-      console.log(`[Sync] ✅ Venta ${venta.id} sincronizada.`);
+      exitosos++;
     } catch (err) {
-      console.error(`[Sync] ❌ Error al sincronizar venta ${venta.id}:`, err);
-      continue;
+      console.error(`[SYNC] ❌ ERROR CRÍTICO al sincronizar venta ${venta.id}: ${err instanceof Error ? err.message : err}`);
     }
+  }
+
+  if (exitosos > 0) {
+    console.info(`[SYNC] ✅ ${exitosos} venta(s) sincronizadas exitosamente.`);
+  }
+  if (exitosos < ventasPendientes.length) {
+    console.warn(`[SYNC] ⚠️  ${ventasPendientes.length - exitosos} venta(s) fallaron y se reintentarán en el próximo ciclo.`);
   }
 }
