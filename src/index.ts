@@ -10,7 +10,7 @@ import { ventaRoutes } from './routes/venta.routes.js';
 import { cajaRoutes } from './routes/caja.routes.js';
 import { dashboardRoutes } from './routes/dashboard.routes.js';
 import { syncRoutes } from './routes/sync.routes.js';
-import { syncVentasToCloud, syncProductosToCloud } from './services/sync.service.js';
+import { syncVentasToCloud, syncProductosToCloud, syncCajasToCloud, syncSesionesCajaToCloud } from './services/sync.service.js';
 import { authHook } from './plugins/auth.plugin.js';
 import { authRoutes } from './routes/auth.routes.js';
 
@@ -86,7 +86,9 @@ const start = async () => {
 
     setInterval(async () => {
       console.info('[SYNC] 🔄 Iniciando ciclo de sincronización...');
-      await syncProductosToCloud(); // Productos primero (son dependencia de ventas)
+      await syncCajasToCloud();          // Cajas primero (dep. de SesionCaja y Venta)
+      await syncSesionesCajaToCloud();   // Sesiones (dep. de Venta)
+      await syncProductosToCloud();      // Productos (dep. de DetalleVenta)
       await syncVentasToCloud();
       console.info('[SYNC] 🏁 Ciclo de sincronización finalizado.');
     }, SYNC_INTERVAL_MS);

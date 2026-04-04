@@ -119,6 +119,13 @@ export async function cerrarCaja(
     const { caja_id } = request.params;
     const { monto_efectivo_contado } = request.body;
 
+    if (monto_efectivo_contado == null || !Number.isFinite(Number(monto_efectivo_contado))) {
+      return reply.status(400).send({ error: 'El campo monto_efectivo_contado es requerido y debe ser un número válido' });
+    }
+
+    // Garantiza que sea number aunque el cliente lo haya enviado como string
+    const montoContado = Number(monto_efectivo_contado);
+
     const sesionAbierta = await prisma.sesionCaja.findFirst({
       where: { caja_id, estado: 'ABIERTA' },
     });
@@ -129,7 +136,7 @@ export async function cerrarCaja(
     const { resumenPagos, totalRecaudado, efectivo_esperado } =
       await calcularResumenSesion(sesionAbierta.id, sesionAbierta.monto_inicial);
 
-    const diferencia = monto_efectivo_contado - efectivo_esperado;
+    const diferencia = montoContado - efectivo_esperado;
 
     const mensaje =
       diferencia === 0
@@ -143,7 +150,7 @@ export async function cerrarCaja(
       data: {
         estado: 'CERRADA',
         fecha_cierre: new Date(),
-        monto_efectivo_cierre: monto_efectivo_contado,
+        monto_efectivo_cierre: montoContado,
         diferencia,
       },
       include: { caja: true },

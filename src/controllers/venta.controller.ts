@@ -162,8 +162,9 @@ export async function cobrarVenta(
       return tx.venta.update({
         where: { id },
         data: {
-          estado:    'PAGADA',
-          sesion_id: sesionAbierta.id,
+          estado:     'PAGADA',
+          sesion_id:  sesionAbierta.id,
+          synced_at:  null, // Resetear para que el sync la vuelva a detectar como pendiente
           // Actualiza el total solo si hay recargo para mantener trazabilidad
           ...(hayRecargo && { total: totalConRecargos }),
         },

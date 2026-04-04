@@ -88,6 +88,9 @@ model SesionCaja {
   monto_efectivo_cierre Float? // Lo que el cajero contó físicamente
   diferencia            Float? // Positivo = Sobró plata / Negativo = Faltó plata
 
+  updated_at     DateTime  @updatedAt @default(now())
+  synced_at      DateTime?
+  
   ventas  Venta[]
   caja_id String
   caja    Caja    @relation(fields: [caja_id], references: [id])

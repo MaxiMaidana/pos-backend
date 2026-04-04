@@ -1,6 +1,6 @@
 import { prisma } from '../db/prisma.js';
 import { supabase } from '../db/supabase.js';
-import type { Producto } from '@prisma/client';
+import type { Producto, SesionCaja } from '@prisma/client';
 
 export async function syncProductosToCloud(): Promise<void> {
   let productos: Producto[] = [];
@@ -8,9 +8,8 @@ export async function syncProductosToCloud(): Promise<void> {
   try {
     // Raw SQL: synced_at IS NULL o updated_at > synced_at (Prisma no soporta comparación entre campos en where)
     productos = await prisma.$queryRaw<Producto[]>`
-      SELECT * FROM Producto
-      WHERE synced_at IS NULL OR updated_at > synced_at
-    `;
+      SELECT * FROM "Producto"
+      WHERE synced_at IS NULL OR updated_at > synced_at      LIMIT 500    `;
   } catch (err) {
     console.error('[SYNC] ❌ ERROR CRÍTICO al leer productos pendientes desde la BD local:', err instanceof Error ? err.message : err);
     return;
@@ -61,14 +60,22 @@ export async function syncProductosToCloud(): Promise<void> {
 }
 
 export async function syncVentasToCloud(): Promise<void> {
-  const ventasPendientes = await prisma.venta.findMany({
-    where: { synced_at: null },
-    include: {
-      detalles: { include: { producto: true } },
-      pagos: true,
-      sesion: { include: { caja: true } },
-    },
-  }).catch(err => {
+  // Raw SQL: synced_at IS NULL o updated_at > synced_at (Prisma no soporta comparación entre campos en where)
+  const ventasPendientes = await prisma.$queryRaw<{ id: string }[]>`
+    SELECT id FROM "Venta" WHERE synced_at IS NULL OR updated_at > synced_at
+    LIMIT 100
+  `.then(rows =>
+    rows.length === 0
+      ? Promise.resolve([])
+      : prisma.venta.findMany({
+          where: { id: { in: rows.map(r => r.id) } },
+          include: {
+            detalles: { include: { producto: true } },
+            pagos: true,
+            sesion: { include: { caja: true } },
+          },
+        })
+  ).catch(err => {
     console.error('[SYNC] ❌ ERROR CRÍTICO al leer ventas pendientes desde la BD local:', err instanceof Error ? err.message : err);
     return null;
   });
@@ -94,7 +101,7 @@ export async function syncVentasToCloud(): Promise<void> {
         });
         if (eCaja) throw new Error(`Caja upsert: ${eCaja.message}`);
 
-        const { caja: _caja, ...sesionData } = venta.sesion;
+        const { caja: _caja, synced_at: _synced, ...sesionData } = venta.sesion;
         const { error: eSesion } = await supabase.from('SesionCaja').upsert({
           ...sesionData,
           cajero_nombre: sesionData.cajero_nombre || 'Cajero Desconocido',
@@ -151,5 +158,111 @@ export async function syncVentasToCloud(): Promise<void> {
   }
   if (exitosos < ventasPendientes.length) {
     console.warn(`[SYNC] ⚠️  ${ventasPendientes.length - exitosos} venta(s) fallaron y se reintentarán en el próximo ciclo.`);
+  }
+}
+
+export async function syncCajasToCloud(): Promise<void> {
+  let cajas: { id: string; nombre: string }[] = [];
+
+  try {
+    // Caja no tiene updated_at (nunca se modifica tras crearse), alcanza con synced_at IS NULL
+    cajas = await prisma.$queryRaw<{ id: string; nombre: string }[]>`
+      SELECT id, nombre FROM "Caja" WHERE synced_at IS NULL
+    `;
+  } catch (err) {
+    console.error('[SYNC] ❌ ERROR CRÍTICO al leer cajas pendientes desde la BD local:', err instanceof Error ? err.message : err);
+    return;
+  }
+
+  if (cajas.length === 0) {
+    console.info('[SYNC] 💤 Cajas: nada nuevo para sincronizar en este ciclo.');
+    return;
+  }
+
+  console.info(`[SYNC] 📦 Se encontraron ${cajas.length} caja(s) pendientes de subir.`);
+
+  let exitosos = 0;
+
+  for (const caja of cajas) {
+    try {
+      const { error } = await supabase.from('Caja').upsert({
+        id:     caja.id,
+        nombre: caja.nombre,
+      });
+      if (error) throw new Error(error.message);
+
+      await prisma.$executeRaw`
+        UPDATE "Caja" SET synced_at = CURRENT_TIMESTAMP WHERE id = ${caja.id}
+      `;
+
+      exitosos++;
+    } catch (err) {
+      console.error(`[SYNC] ❌ ERROR CRÍTICO al sincronizar caja "${caja.nombre}" (${caja.id}): ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  if (exitosos > 0) {
+    console.info(`[SYNC] ✅ ${exitosos} caja(s) sincronizadas exitosamente.`);
+  }
+  if (exitosos < cajas.length) {
+    console.warn(`[SYNC] ⚠️  ${cajas.length - exitosos} caja(s) fallaron y se reintentarán en el próximo ciclo.`);
+  }
+}
+
+export async function syncSesionesCajaToCloud(): Promise<void> {
+  let sesiones: SesionCaja[] = [];
+
+  try {
+    // Raw SQL: updated_at > synced_at detecta cierres de caja posteriores a la última sync
+    sesiones = await prisma.$queryRaw<SesionCaja[]>`
+      SELECT * FROM "SesionCaja" WHERE synced_at IS NULL OR updated_at > synced_at
+    `;
+  } catch (err) {
+    console.error('[SYNC] ❌ ERROR CRÍTICO al leer sesiones de caja pendientes desde la BD local:', err instanceof Error ? err.message : err);
+    return;
+  }
+
+  if (sesiones.length === 0) {
+    console.info('[SYNC] 💤 SesionesCaja: nada nuevo para sincronizar en este ciclo.');
+    return;
+  }
+
+  console.info(`[SYNC] 📦 Se encontraron ${sesiones.length} sesión(es) de caja pendientes de subir.`);
+
+  let exitosos = 0;
+
+  for (const sesion of sesiones) {
+    try {
+      const { error } = await supabase.from('SesionCaja').upsert({
+        id:                    sesion.id,
+        cajero_nombre:         sesion.cajero_nombre || 'Cajero Desconocido',
+        fecha_apertura:        sesion.fecha_apertura,
+        fecha_cierre:          sesion.fecha_cierre,
+        monto_inicial:         sesion.monto_inicial,
+        estado:                sesion.estado,
+        monto_efectivo_cierre: sesion.monto_efectivo_cierre,
+        diferencia:            sesion.diferencia,
+        caja_id:               sesion.caja_id,
+        updated_at:            sesion.updated_at,
+      });
+      if (error) throw new Error(error.message);
+
+      // $executeRaw evita que @updatedAt modifique updated_at y genere un bucle infinito.
+      // SET synced_at = updated_at garantiza igualdad exacta entre ambos campos.
+      await prisma.$executeRaw`
+        UPDATE "SesionCaja" SET synced_at = updated_at WHERE id = ${sesion.id}
+      `;
+
+      exitosos++;
+    } catch (err) {
+      console.error(`[SYNC] ❌ ERROR CRÍTICO al sincronizar sesión de caja (${sesion.id}): ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  if (exitosos > 0) {
+    console.info(`[SYNC] ✅ ${exitosos} sesión(es) de caja sincronizadas exitosamente.`);
+  }
+  if (exitosos < sesiones.length) {
+    console.warn(`[SYNC] ⚠️  ${sesiones.length - exitosos} sesión(es) fallaron y se reintentarán en el próximo ciclo.`);
   }
 }
