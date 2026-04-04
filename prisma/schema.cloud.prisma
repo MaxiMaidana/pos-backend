@@ -99,6 +99,7 @@ model SesionCaja {
 model Caja {
   id       String       @id @default(uuid())
   nombre   String       @unique // Ej: "Caja 1", "Caja 2"
+  synced_at DateTime?
   sesiones SesionCaja[]
 }
 
