@@ -1,6 +1,8 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../db/prisma.js';
 
+const TIENDA_LOCAL_ID = process.env.TIENDA_LOCAL_ID!;
+
 // ── Helper compartido ─────────────────────────────────────────────────────────
 function buildRangoDia(fecha?: string): { gte: Date; lte: Date } {
   const base = fecha ? new Date(`${fecha}T00:00:00`) : new Date();
@@ -44,9 +46,12 @@ async function getDashboardStats(
           _sum: { total: true },
         }),
 
-        // Stock crítico actual (independiente de la fecha)
+        // Stock crítico actual en esta tienda (independiente de la fecha)
         prisma.producto.count({
-          where: { activo: true, stock: { lte: 5 } },
+          where: {
+            activo: true,
+            stocks: { some: { tienda_id: TIENDA_LOCAL_ID, cantidad: { lte: 5 } } },
+          },
         }),
 
         // Desglose global de pagos agrupado por método

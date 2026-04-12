@@ -1,5 +1,5 @@
 // ──────────────────────────────────────────────────────────────────────────────
-// Schema para el entorno CLOUD (Render + Supabase/PostgreSQL).
+// Schema para el entorno CLOUD (Supabase/PostgreSQL).
 // NO modificar provider ni url — son los únicos cambios respecto al schema local.
 //
 // Uso:  prisma generate --schema=./prisma/schema.cloud.prisma
@@ -15,24 +15,51 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
+model Tienda {
+  id         String       @id @default(uuid())
+  nombre     String
+  direccion  String?
+  creado_en  DateTime     @default(now())
+  updated_at DateTime     @updatedAt
+
+  stocks   StockTienda[]
+  ventas   Venta[]
+  sesiones SesionCaja[]
+}
+
 model Producto {
-  id              String         @id @default(uuid())
-  codigo_barras   String?        @unique
-  nombre          String
-  precio_actual   Float
-  stock           Int
-  activo          Boolean        @default(true)
-  eliminado       Boolean        @default(false)
-  updated_at      DateTime       @updatedAt @default(now())
-  synced_at       DateTime?
+  id            String  @id @default(uuid())
+  codigo_barras String? @unique
+  nombre        String
+  precio_actual Float
+  activo        Boolean @default(true)
+  eliminado     Boolean @default(false)
+  updated_at    DateTime @updatedAt @default(now())
+  synced_at     DateTime?
+
   detalles_ventas DetalleVenta[]
+  stocks          StockTienda[]
+}
+
+model StockTienda {
+  id          String    @id @default(uuid())
+  producto_id String
+  tienda_id   String
+  cantidad    Int       @default(0)
+  updated_at  DateTime  @updatedAt @default(now())
+  synced_at   DateTime?
+
+  producto Producto @relation(fields: [producto_id], references: [id])
+  tienda   Tienda   @relation(fields: [tienda_id], references: [id])
+
+  @@unique([producto_id, tienda_id])
 }
 
 model Venta {
-  id              String   @id @default(uuid())
-  estado          String   @default("PENDIENTE") // PENDIENTE, PAGADA, CANCELADA, ANULADA
+  id              String @id @default(uuid())
+  estado          String @default("PENDIENTE") // PENDIENTE, PAGADA, CANCELADA, ANULADA
   total           Float
-  descuento_total Float    @default(0)
+  descuento_total Float  @default(0)
 
   vendedor_nombre String
 
@@ -41,18 +68,21 @@ model Venta {
   synced_at  DateTime?
 
   // Campos para facturación electrónica (AFIP/ARCA)
-  estadoFacturacion String        @default("NO_APLICA") // NO_APLICA, PENDIENTE, FACTURADA, ERROR
-  cae               String?        // Código de Autorización Electrónico
+  estadoFacturacion String  @default("NO_APLICA") // NO_APLICA, PENDIENTE, FACTURADA, ERROR
+  cae               String?
   vencimientoCae    String?
   numeroFactura     Int?
-  tipoFactura       String?        // Ej: "C", "B", "A"
-  errorFacturacion  String?        // Descripción del error si fue rechazada por ARCA
+  tipoFactura       String? // Ej: "C", "B", "A"
+  errorFacturacion  String?
 
   detalles DetalleVenta[]
   pagos    Pago[]
 
   sesion_id String?
   sesion    SesionCaja? @relation(fields: [sesion_id], references: [id])
+
+  tienda_id String?
+  tienda    Tienda? @relation(fields: [tienda_id], references: [id])
 }
 
 model DetalleVenta {
@@ -85,29 +115,47 @@ model SesionCaja {
   monto_inicial  Float
   estado         String    @default("ABIERTA") // ABIERTA, CERRADA
 
-  monto_efectivo_cierre Float? // Lo que el cajero contó físicamente
-  diferencia            Float? // Positivo = Sobró plata / Negativo = Faltó plata
+  monto_efectivo_cierre Float?
+  diferencia            Float?
 
-  updated_at     DateTime  @updatedAt @default(now())
-  synced_at      DateTime?
-  
-  ventas  Venta[]
+  updated_at DateTime  @updatedAt @default(now())
+  synced_at  DateTime?
+
+  ventas      Venta[]
+  movimientos MovimientoCaja[]
+
   caja_id String
-  caja    Caja    @relation(fields: [caja_id], references: [id])
+  caja    Caja @relation(fields: [caja_id], references: [id])
+
+  tienda_id String?
+  tienda    Tienda? @relation(fields: [tienda_id], references: [id])
+}
+
+model MovimientoCaja {
+  id         String   @id @default(uuid())
+  monto      Float
+  motivo     String
+  tipo       String   // RETIRO, INGRESO
+  sesion_id  String
+  creado_en  DateTime @default(now())
+  updated_at DateTime @updatedAt
+  synced_at  DateTime?
+
+  sesion SesionCaja @relation(fields: [sesion_id], references: [id])
 }
 
 model Caja {
-  id       String       @id @default(uuid())
-  nombre   String       @unique // Ej: "Caja 1", "Caja 2"
+  id        String       @id @default(uuid())
+  nombre    String       @unique
   synced_at DateTime?
-  sesiones SesionCaja[]
+  sesiones  SesionCaja[]
 }
 
 model ConfiguracionTienda {
-  id                  Int     @id @default(1)
-  cuit                String
-  razonSocial         String
-  condicionFiscal     String  // MONOTRIBUTO, RESPONSABLE_INSCRIPTO
-  puntoVenta          Int
-  entornoProduccion   Boolean @default(false)
+  id                Int     @id @default(1)
+  cuit              String
+  razonSocial       String
+  condicionFiscal   String  // MONOTRIBUTO, RESPONSABLE_INSCRIPTO
+  puntoVenta        Int
+  entornoProduccion Boolean @default(false)
 }

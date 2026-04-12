@@ -2,6 +2,8 @@ import type { FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../db/prisma.js';
 import type { Prisma } from '@prisma/client';
 
+const TIENDA_LOCAL_ID = process.env.TIENDA_LOCAL_ID!;
+
 interface DetalleInput {
   producto_id: string;
   cantidad: number;
@@ -63,9 +65,9 @@ export async function createComanda(
       });
 
       for (const detalle of detalles) {
-        await tx.producto.update({
-          where: { id: detalle.producto_id },
-          data: { stock: { decrement: detalle.cantidad } },
+        await tx.stockTienda.updateMany({
+          where: { producto_id: detalle.producto_id, tienda_id: TIENDA_LOCAL_ID },
+          data:  { cantidad: { decrement: detalle.cantidad } },
         });
       }
 
@@ -254,9 +256,9 @@ export async function anularVenta(
 
     await prisma.$transaction(async (tx) => {
       for (const detalle of venta.detalles) {
-        await tx.producto.update({
-          where: { id: detalle.producto_id },
-          data: { stock: { increment: detalle.cantidad } },
+        await tx.stockTienda.updateMany({
+          where: { producto_id: detalle.producto_id, tienda_id: TIENDA_LOCAL_ID },
+          data:  { cantidad: { increment: detalle.cantidad } },
         });
       }
 
@@ -295,9 +297,9 @@ export async function cancelarVenta(
 
     const ventaCancelada = await prisma.$transaction(async (tx) => {
       for (const detalle of venta.detalles) {
-        await tx.producto.update({
-          where: { id: detalle.producto_id },
-          data: { stock: { increment: detalle.cantidad } },
+        await tx.stockTienda.updateMany({
+          where: { producto_id: detalle.producto_id, tienda_id: TIENDA_LOCAL_ID },
+          data:  { cantidad: { increment: detalle.cantidad } },
         });
       }
 

@@ -10,7 +10,7 @@ import { ventaRoutes } from './routes/venta.routes.js';
 import { cajaRoutes } from './routes/caja.routes.js';
 import { dashboardRoutes } from './routes/dashboard.routes.js';
 import { syncRoutes } from './routes/sync.routes.js';
-import { syncVentasToCloud, syncProductosToCloud, syncCajasToCloud, syncSesionesCajaToCloud } from './services/sync.service.js';
+import { syncVentasToCloud, syncProductosToCloud, syncCajasToCloud, syncSesionesCajaToCloud, syncStockTiendaToCloud, pullFromCloud } from './services/sync.service.js';
 import { authHook } from './plugins/auth.plugin.js';
 import { authRoutes } from './routes/auth.routes.js';
 
@@ -86,9 +86,15 @@ const start = async () => {
 
     setInterval(async () => {
       console.info('[SYNC] 🔄 Iniciando ciclo de sincronización...');
+      // ── Pull (nube → local) ─────────────────────────────────────────────────
+      // Se ejecuta PRIMERO para que los datos remotos estén disponibles offline
+      // antes de que el frontend los consulte en este ciclo.
+      await pullFromCloud();
+      // ── Push (local → nube) ─────────────────────────────────────────────────
       await syncCajasToCloud();          // Cajas primero (dep. de SesionCaja y Venta)
       await syncSesionesCajaToCloud();   // Sesiones (dep. de Venta)
-      await syncProductosToCloud();      // Productos (dep. de DetalleVenta)
+      await syncProductosToCloud();      // Productos (dep. de StockTienda y DetalleVenta)
+      await syncStockTiendaToCloud();    // Stock por tienda
       await syncVentasToCloud();
       console.info('[SYNC] 🏁 Ciclo de sincronización finalizado.');
     }, SYNC_INTERVAL_MS);
@@ -96,7 +102,15 @@ const start = async () => {
 
     await fastify.listen({ port: 3000, host: '0.0.0.0' });
   } catch (err) {
-    fastify.log.error(err);
+    console.error('[FATAL] Error al iniciar el servidor:');
+    if (err instanceof Error) {
+      console.error(err.message);
+      if (err.stack) console.error(err.stack);
+    } else {
+      // Los errores de Fastify/ts-node no heredan de Error; usamos inspect para ver el mensaje real.
+      const { inspect } = await import('node:util');
+      console.error(inspect(err, { depth: null }));
+    }
     process.exit(1);
   }
 };

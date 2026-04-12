@@ -2,6 +2,15 @@ import type { FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../db/prisma.js';
 import type { Prisma } from '@prisma/client';
 
+const TIENDA_LOCAL_ID = process.env.TIENDA_LOCAL_ID;
+if (!TIENDA_LOCAL_ID) {
+  throw new Error('[CONFIG] La variable de entorno TIENDA_LOCAL_ID no está configurada.');
+}
+
+// ── Tipos ─────────────────────────────────────────────────────────────────────
+
+type ProductoConStocks = Prisma.ProductoGetPayload<{ include: { stocks: true } }>;
+
 interface CreateProductoBody {
   nombre: string;
   precio_actual: number;
@@ -39,6 +48,24 @@ interface GetProductosQuery {
   soloActivos?: string;
 }
 
+// ── Helper ────────────────────────────────────────────────────────────────────
+// Expone stock_local (tienda propia) y stock_otro (suma de todas las demás)
+// para que el frontend no tenga que iterar el array de stocks.
+function mapProductoConStock(p: ProductoConStocks) {
+  let stock_local = 0;
+  let stock_otro  = 0;
+  for (const s of p.stocks) {
+    if (s.tienda_id === TIENDA_LOCAL_ID) {
+      stock_local = s.cantidad;
+    } else {
+      stock_otro += s.cantidad;
+    }
+  }
+  return { ...p, stock_local, stock_otro };
+}
+
+// ── Controladores ─────────────────────────────────────────────────────────────
+
 export async function getProductos(
   request: FastifyRequest<{ Querystring: GetProductosQuery }>,
   reply: FastifyReply
@@ -52,7 +79,6 @@ export async function getProductos(
 
     const where: Prisma.ProductoWhereInput = {
       eliminado: false,
-      // soloActivos=true  → solo activos (POS)  |  omitido o false → todos (inventario)
       ...(soloActivos === 'true' && { activo: true }),
       ...(search && {
         OR: [
@@ -60,7 +86,10 @@ export async function getProductos(
           { codigo_barras: { contains: search } },
         ],
       }),
-      ...(stockBajo === 'true' && { stock: { lte: 5 } }),
+      // Filtra por stock bajo en esta tienda usando la relación anidada
+      ...(stockBajo === 'true' && {
+        stocks: { some: { tienda_id: TIENDA_LOCAL_ID, cantidad: { lte: 5 } } },
+      }),
     };
 
     const [total, data] = await prisma.$transaction([
@@ -70,17 +99,13 @@ export async function getProductos(
         skip,
         take:    limit,
         orderBy: { nombre: 'asc' },
+        include: { stocks: true },
       }),
     ]);
 
     return reply.send({
-      data,
-      meta: {
-        total,
-        page,
-        limit,
-        totalPages: Math.ceil(total / limit),
-      },
+      data: data.map(mapProductoConStock),
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     });
   } catch (error) {
     request.log.error(error);
@@ -95,17 +120,22 @@ export async function createProducto(
   try {
     const { nombre, precio_actual, stock, codigo_barras } = request.body;
 
-    const producto = await prisma.producto.create({
-      data: {
-        nombre,
-        precio_actual,
-        stock,
-        codigo_barras,
-        synced_at: null,
-      },
+    const producto = await prisma.$transaction(async (tx) => {
+      const nuevo = await tx.producto.create({
+        data: { nombre, precio_actual, codigo_barras, synced_at: null },
+      });
+
+      await tx.stockTienda.create({
+        data: { producto_id: nuevo.id, tienda_id: TIENDA_LOCAL_ID!, cantidad: stock ?? 0 },
+      });
+
+      return tx.producto.findUnique({
+        where:   { id: nuevo.id },
+        include: { stocks: true },
+      });
     });
 
-    return reply.status(201).send(producto);
+    return reply.status(201).send(mapProductoConStock(producto!));
   } catch (error) {
     request.log.error(error);
     return reply.status(500).send({ error: 'Error al crear el producto' });
@@ -120,18 +150,32 @@ export async function updateProducto(
     const { id } = request.params;
     const { nombre, precio_actual, stock, codigo_barras } = request.body;
 
-    const producto = await prisma.producto.update({
-      where: { id },
-      data: {
-        ...(nombre !== undefined && { nombre }),
-        ...(precio_actual !== undefined && { precio_actual }),
-        ...(stock !== undefined && { stock }),
-        ...(codigo_barras !== undefined && { codigo_barras }),
-        synced_at: null,
-      },
+    const producto = await prisma.$transaction(async (tx) => {
+      await tx.producto.update({
+        where: { id },
+        data: {
+          ...(nombre        !== undefined && { nombre }),
+          ...(precio_actual !== undefined && { precio_actual }),
+          ...(codigo_barras !== undefined && { codigo_barras }),
+          synced_at: null,
+        },
+      });
+
+      if (stock !== undefined) {
+        await tx.stockTienda.upsert({
+          where:  { producto_id_tienda_id: { producto_id: id, tienda_id: TIENDA_LOCAL_ID! } },
+          update: { cantidad: stock },
+          create: { producto_id: id, tienda_id: TIENDA_LOCAL_ID!, cantidad: stock },
+        });
+      }
+
+      return tx.producto.findUnique({
+        where:   { id },
+        include: { stocks: true },
+      });
     });
 
-    return reply.send(producto);
+    return reply.send(mapProductoConStock(producto!));
   } catch (error) {
     request.log.error(error);
     return reply.status(500).send({ error: 'Error al actualizar el producto' });
@@ -144,12 +188,10 @@ export async function deleteProducto(
 ) {
   try {
     const { id } = request.params;
-
     const producto = await prisma.producto.update({
       where: { id },
-      data: { eliminado: true, synced_at: null },
+      data:  { eliminado: true, synced_at: null },
     });
-
     return reply.send(producto);
   } catch (error) {
     request.log.error(error);
@@ -181,6 +223,8 @@ export async function toggleActivo(
   }
 }
 
+// ── Importación CSV ───────────────────────────────────────────────────────────
+
 const IMPORT_BATCH_SIZE = 500;
 
 export async function importarProductos(
@@ -194,7 +238,6 @@ export async function importarProductos(
       return reply.status(400).send({ error: 'El campo "productos" debe ser un array no vacío' });
     }
 
-    // Validar campos requeridos en cada fila antes de tocar la BD
     const filasInvalidas: number[] = [];
     for (let i = 0; i < productos.length; i++) {
       const p = productos[i];
@@ -204,7 +247,7 @@ export async function importarProductos(
         p.precio_actual == null || !Number.isFinite(Number(p.precio_actual)) ||
         p.stock == null        || !Number.isFinite(Number(p.stock))
       ) {
-        filasInvalidas.push(i + 1); // 1-based para el mensaje al usuario
+        filasInvalidas.push(i + 1);
       }
     }
     if (filasInvalidas.length > 0) {
@@ -213,49 +256,74 @@ export async function importarProductos(
       });
     }
 
-    // Obtener códigos de barras ya existentes para poder omitir duplicados
-    // (createMany con skipDuplicates no está soportado en SQLite por Prisma)
-    const codigosEnviados = productos
-      .map(p => p.codigo_barras)
-      .filter((c): c is string => !!c);
+    let creados = 0;
+    let actualizados = 0;
 
-    const existentes = codigosEnviados.length > 0
-      ? await prisma.producto.findMany({
-          where: { codigo_barras: { in: codigosEnviados } },
-          select: { codigo_barras: true },
-        })
-      : [];
+    for (let i = 0; i < productos.length; i += IMPORT_BATCH_SIZE) {
+      const lote = productos.slice(i, i + IMPORT_BATCH_SIZE).filter(Boolean) as ImportProductoItem[];
 
-    const codigosExistentes = new Set(existentes.map(e => e.codigo_barras));
+      await prisma.$transaction(async (tx) => {
+        for (const p of lote) {
+          let productoId: string;
 
-    const productosNuevos = productos.filter(
-      p => !p.codigo_barras || !codigosExistentes.has(p.codigo_barras)
-    );
-    const omitidos = productos.length - productosNuevos.length;
+          if (p.codigo_barras) {
+            // Con código de barras: upsert (actualiza catálogo si ya existía)
+            const existente = await tx.producto.findUnique({
+              where:  { codigo_barras: p.codigo_barras },
+              select: { id: true },
+            });
 
-    // Insertar en lotes para no saturar SQLite con una transacción de 15k filas
-    let insertados = 0;
-    for (let i = 0; i < productosNuevos.length; i += IMPORT_BATCH_SIZE) {
-      const lote = productosNuevos.slice(i, i + IMPORT_BATCH_SIZE);
-      const resultado = await prisma.producto.createMany({
-        data: lote.map(p => ({
-          nombre:        p.nombre,
-          precio_actual: Number(p.precio_actual),
-          stock:         Number(p.stock),
-          codigo_barras: p.codigo_barras ?? null,
-          activo:        true,
-          eliminado:     false,
-          synced_at:     null,
-        })),
+            if (existente) {
+              await tx.producto.update({
+                where: { id: existente.id },
+                data:  { nombre: p.nombre, precio_actual: Number(p.precio_actual), synced_at: null },
+              });
+              productoId = existente.id;
+              actualizados++;
+            } else {
+              const nuevo = await tx.producto.create({
+                data: {
+                  nombre:        p.nombre,
+                  precio_actual: Number(p.precio_actual),
+                  codigo_barras: p.codigo_barras,
+                  activo:        true,
+                  eliminado:     false,
+                  synced_at:     null,
+                },
+              });
+              productoId = nuevo.id;
+              creados++;
+            }
+          } else {
+            // Sin código de barras: siempre crea nuevo (no hay clave única para deduplicar)
+            const nuevo = await tx.producto.create({
+              data: {
+                nombre:        p.nombre,
+                precio_actual: Number(p.precio_actual),
+                activo:        true,
+                eliminado:     false,
+                synced_at:     null,
+              },
+            });
+            productoId = nuevo.id;
+            creados++;
+          }
+
+          // Registra o actualiza el stock en esta tienda
+          await tx.stockTienda.upsert({
+            where:  { producto_id_tienda_id: { producto_id: productoId, tienda_id: TIENDA_LOCAL_ID! } },
+            update: { cantidad: Number(p.stock) },
+            create: { producto_id: productoId, tienda_id: TIENDA_LOCAL_ID!, cantidad: Number(p.stock) },
+          });
+        }
       });
-      insertados += resultado.count;
     }
 
     return reply.status(201).send({
-      success:    true,
-      insertados,
-      omitidos,
-      message:    `${insertados} producto(s) importados correctamente. ${omitidos} omitido(s) por código de barras duplicado.`,
+      success:      true,
+      creados,
+      actualizados,
+      message: `${creados} producto(s) creado(s), ${actualizados} actualizado(s).`,
     });
   } catch (error) {
     request.log.error(error);
@@ -263,9 +331,8 @@ export async function importarProductos(
   }
 }
 
-// Escapa un valor para que sea seguro dentro de una celda CSV:
-// - Envuelve en comillas dobles si contiene coma, comilla doble o salto de línea.
-// - Duplica las comillas dobles internas.
+// ── Exportación CSV ───────────────────────────────────────────────────────────
+
 function csvCell(value: string | number | boolean | null | undefined): string {
   if (value == null) return '';
   const str = String(value);
@@ -283,28 +350,23 @@ export async function exportarProductos(
     const productos = await prisma.producto.findMany({
       where:   { eliminado: false },
       orderBy: { nombre: 'asc' },
-      select: {
-        codigo_barras: true,
-        nombre:        true,
-        precio_actual: true,
-        stock:         true,
-        activo:        true,
-      },
+      include: { stocks: { where: { tienda_id: TIENDA_LOCAL_ID! } } },
     });
 
     const HEADERS = ['codigo_barras', 'nombre', 'precio_actual', 'stock', 'activo'];
-    const rows = productos.map(p =>
-      [
+    const rows = productos.map(p => {
+      const stockLocal = p.stocks[0]?.cantidad ?? 0;
+      return [
         csvCell(p.codigo_barras),
         csvCell(p.nombre),
         csvCell(p.precio_actual),
-        csvCell(p.stock),
+        csvCell(stockLocal),
         csvCell(p.activo),
-      ].join(',')
-    );
+      ].join(',');
+    });
 
     const csv = [HEADERS.join(','), ...rows].join('\n');
-    const fecha = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const fecha = new Date().toISOString().slice(0, 10);
 
     return reply
       .header('Content-Type', 'text/csv; charset=utf-8')
