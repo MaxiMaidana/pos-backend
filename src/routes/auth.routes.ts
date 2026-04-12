@@ -1,5 +1,11 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 
+async function getIdentidad(_request: FastifyRequest, reply: FastifyReply) {
+  return reply.send({
+    nombre_tienda: process.env.TIENDA_LOCAL_NOMBRE || 'Punto de Venta',
+  });
+}
+
 interface LoginBody {
   rol:      string;
   password: string;
@@ -46,6 +52,8 @@ async function login(
 }
 
 export async function authRoutes(fastify: FastifyInstance) {
-  // POST /api/auth/login  →  pública, NO pasa por authHook
+  // GET /api/config/identidad  →  pública, la consume el login ANTES de tener token
+  fastify.get('/api/config/identidad', getIdentidad);
+  // POST /api/auth/login       →  pública, NO pasa por authHook
   fastify.post('/api/auth/login', login);
 }
