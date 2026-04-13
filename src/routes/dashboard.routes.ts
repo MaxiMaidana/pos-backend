@@ -1,8 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../db/prisma.js';
 
-const TIENDA_LOCAL_ID = process.env.TIENDA_LOCAL_ID!;
-
 // ── Helper compartido ─────────────────────────────────────────────────────────
 function buildRangoDia(fecha?: string): { gte: Date; lte: Date } {
   const base = fecha ? new Date(`${fecha}T00:00:00`) : new Date();
@@ -13,8 +11,8 @@ function buildRangoDia(fecha?: string): { gte: Date; lte: Date } {
   return { gte: inicio, lte: fin };
 }
 
-interface StatsQuery { fecha?: string; }
-interface AnaliticasQuery { fecha?: string; }
+interface StatsQuery { fecha?: string; tienda_id?: string; }
+interface AnaliticasQuery { fecha?: string; tienda_id?: string; }
 
 // ── GET /api/dashboard/stats ─────────────────────────────────────────────────
 async function getDashboardStats(
@@ -22,12 +20,15 @@ async function getDashboardStats(
   reply: FastifyReply
 ) {
   try {
-    const rango = buildRangoDia(request.query.fecha);
+    const { fecha, tienda_id } = request.query;
+    const rango = buildRangoDia(fecha);
+    const filtrotiendaId = tienda_id || undefined;
 
     // Reutilizable: ventas cobradas del día (mutable para que Prisma lo acepte)
     const whereVentasPagadas = {
       created_at: rango,
       estado: { notIn: ['PENDIENTE', 'ANULADA', 'CANCELADA'] as string[] },
+      ...(filtrotiendaId && { tienda_id: filtrotiendaId }),
     };
 
     const [ventasTotales, ventasCanceladas, recaudacion, productosStockBajo, pagosPorMetodo] =
@@ -37,7 +38,11 @@ async function getDashboardStats(
 
         // Ventas anuladas en la fecha
         prisma.venta.count({
-          where: { created_at: rango, estado: 'ANULADA' },
+          where: {
+            created_at: rango,
+            estado: 'ANULADA',
+            ...(filtrotiendaId && { tienda_id: filtrotiendaId }),
+          },
         }),
 
         // Suma total recaudado
@@ -46,19 +51,30 @@ async function getDashboardStats(
           _sum: { total: true },
         }),
 
-        // Stock crítico actual en esta tienda (independiente de la fecha)
+        // Stock crítico — filtra por tienda si se pide, si no muestra cualquier tienda
         prisma.producto.count({
           where: {
             activo: true,
-            stocks: { some: { tienda_id: TIENDA_LOCAL_ID, cantidad: { lte: 5 } } },
+            stocks: {
+              some: {
+                cantidad: { lte: 5 },
+                ...(filtrotiendaId
+                  ? { tienda_id: filtrotiendaId }
+                  : {}),
+              },
+            },
           },
         }),
 
-        // Desglose global de pagos agrupado por método
+        // Desglose de pagos agrupado por método
         prisma.pago.groupBy({
           by: ['metodo'],
           where: {
-            venta: { created_at: rango, estado: 'PAGADA' },
+            venta: {
+              created_at: rango,
+              estado: 'PAGADA',
+              ...(filtrotiendaId && { tienda_id: filtrotiendaId }),
+            },
           },
           _sum:     { monto: true },
           orderBy:  { metodo: 'asc' },
@@ -72,7 +88,8 @@ async function getDashboardStats(
     }
 
     return reply.send({
-      fecha:               request.query.fecha ?? new Date().toISOString().slice(0, 10),
+      fecha:               fecha ?? new Date().toISOString().slice(0, 10),
+      tienda_id:           filtrotiendaId ?? null,
       ventasTotales,
       ventasCanceladas,
       recaudacionTotal:    recaudacion._sum?.total ?? 0,
@@ -91,14 +108,19 @@ async function getAnaliticas(
   reply: FastifyReply
 ) {
   try {
-    const rango = buildRangoDia(request.query.fecha);
+    const { fecha, tienda_id } = request.query;
+    const rango = buildRangoDia(fecha);
+    const filtrotiendaId = tienda_id || undefined;
 
     const [todasVentas, ventasCobradas, ventasAnuladas, sesiones] = await prisma.$transaction([
 
       // 1. Volumen total: TODAS las ventas del vendedor ese día (todos los estados)
       prisma.venta.groupBy({
         by: ['vendedor_nombre'],
-        where: { created_at: rango },
+        where: {
+          created_at: rango,
+          ...(filtrotiendaId && { tienda_id: filtrotiendaId }),
+        },
         _count: { _all: true },
         orderBy: { _count: { vendedor_nombre: 'desc' } },
       }),
@@ -106,7 +128,11 @@ async function getAnaliticas(
       // 2. Solo PAGADAS: para calcular recaudacionTotal
       prisma.venta.groupBy({
         by: ['vendedor_nombre'],
-        where: { created_at: rango, estado: 'PAGADA' },
+        where: {
+          created_at: rango,
+          estado: 'PAGADA',
+          ...(filtrotiendaId && { tienda_id: filtrotiendaId }),
+        },
         _sum: { total: true },
         orderBy: { _sum: { total: 'desc' } },
       }),
@@ -114,14 +140,21 @@ async function getAnaliticas(
       // 3. Anulaciones agrupadas por vendedor
       prisma.venta.groupBy({
         by: ['vendedor_nombre'],
-        where: { created_at: rango, estado: 'ANULADA' },
+        where: {
+          created_at: rango,
+          estado: 'ANULADA',
+          ...(filtrotiendaId && { tienda_id: filtrotiendaId }),
+        },
         _count: { _all: true },
         orderBy: { _count: { vendedor_nombre: 'desc' } },
       }),
 
       // 4. Sesiones de caja del día — incluye PAGADAS y ANULADAS con sus pagos y movimientos
       prisma.sesionCaja.findMany({
-        where: { fecha_apertura: rango },
+        where: {
+          fecha_apertura: rango,
+          ...(filtrotiendaId && { tienda_id: filtrotiendaId }),
+        },
         include: {
           caja: true,
           ventas: {
@@ -209,7 +242,8 @@ async function getAnaliticas(
     });
 
     return reply.send({
-      fecha:                 request.query.fecha ?? new Date().toISOString().slice(0, 10),
+      fecha:                 fecha ?? new Date().toISOString().slice(0, 10),
+      tienda_id:             filtrotiendaId ?? null,
       rendimientoVendedores,
       reporteCajas,
     });
