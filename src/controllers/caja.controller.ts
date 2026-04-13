@@ -1,6 +1,8 @@
 import type { FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../db/prisma.js';
 
+const TIENDA_LOCAL_ID = process.env.TIENDA_LOCAL_ID!;
+
 interface AbrirCajaBody {
   caja_id: string;
   cajero_nombre: string;
@@ -15,7 +17,15 @@ interface CerrarCajaBody {
   monto_efectivo_contado: number;
 }
 
-// Helper reutilizable para calcular el resumen de pagos de una sesión
+interface MovimientoCajaBody {
+  monto:  number;
+  motivo: string;
+  tipo:   'RETIRO' | 'INGRESO';
+}
+
+// Helper reutilizable para calcular el resumen de pagos de una sesión.
+// Resta RETIROS y suma INGRESOS de MovimientoCaja para que el efectivo
+// esperado en cajón sea matemáticamente correcto.
 async function calcularResumenSesion(sesion_id: string, monto_inicial: number) {
   const ventaIds = await prisma.venta
     .findMany({
@@ -24,22 +34,32 @@ async function calcularResumenSesion(sesion_id: string, monto_inicial: number) {
     })
     .then((vs) => vs.map((v) => v.id));
 
-  const pagosAgrupados = await prisma.pago.groupBy({
-    by: ['metodo'],
-    where: { venta_id: { in: ventaIds } },
-    _sum: { monto: true },
-  });
+  const [pagosAgrupados, movimientos] = await Promise.all([
+    prisma.pago.groupBy({
+      by: ['metodo'],
+      where: { venta_id: { in: ventaIds } },
+      _sum: { monto: true },
+    }),
+    prisma.movimientoCaja.findMany({
+      where: { sesion_id },
+      select: { tipo: true, monto: true },
+    }),
+  ]);
 
   const resumenPagos = pagosAgrupados.map((p) => ({
     metodo: p.metodo,
-    total: p._sum?.monto ?? 0,
+    total:  p._sum?.monto ?? 0,
   }));
 
-  const totalRecaudado = resumenPagos.reduce((sum, p) => sum + p.total, 0);
-  const efectivoVentas = resumenPagos.find((p) => p.metodo === 'EFECTIVO')?.total ?? 0;
-  const efectivo_esperado = monto_inicial + efectivoVentas;
+  const totalRecaudado  = resumenPagos.reduce((sum, p) => sum + p.total, 0);
+  const efectivoVentas  = resumenPagos.find((p) => p.metodo === 'EFECTIVO')?.total ?? 0;
 
-  return { resumenPagos, totalRecaudado, efectivo_esperado };
+  const totalRetiros  = movimientos.filter(m => m.tipo === 'RETIRO').reduce((s, m) => s + m.monto, 0);
+  const totalIngresos = movimientos.filter(m => m.tipo === 'INGRESO').reduce((s, m) => s + m.monto, 0);
+
+  const efectivo_esperado = monto_inicial + efectivoVentas - totalRetiros + totalIngresos;
+
+  return { resumenPagos, totalRecaudado, efectivoVentas, efectivo_esperado, totalRetiros, totalIngresos };
 }
 
 export async function abrirCaja(
@@ -65,8 +85,9 @@ export async function abrirCaja(
       data: {
         cajero_nombre,
         monto_inicial,
-        estado: 'ABIERTA',
+        estado:    'ABIERTA',
         caja_id,
+        tienda_id: TIENDA_LOCAL_ID,
       },
       include: { caja: true },
     });
@@ -93,16 +114,19 @@ export async function obtenerArqueo(
       return reply.status(400).send({ error: 'Esa caja no tiene ninguna sesión abierta' });
     }
 
-    const { resumenPagos, totalRecaudado, efectivo_esperado } =
+    const { resumenPagos, totalRecaudado, efectivoVentas, efectivo_esperado, totalRetiros, totalIngresos } =
       await calcularResumenSesion(sesionAbierta.id, sesionAbierta.monto_inicial);
 
     return reply.send({
-      caja: sesionAbierta.caja,
-      cajero: sesionAbierta.cajero_nombre,
-      fecha_apertura: sesionAbierta.fecha_apertura,
-      monto_inicial: sesionAbierta.monto_inicial,
-      ventas_por_metodo: resumenPagos,
-      total_recaudado: totalRecaudado,
+      caja:                       sesionAbierta.caja,
+      cajero:                     sesionAbierta.cajero_nombre,
+      fecha_apertura:             sesionAbierta.fecha_apertura,
+      monto_inicial:              sesionAbierta.monto_inicial,
+      ventas_por_metodo:          resumenPagos,
+      ventas_efectivo:            efectivoVentas,
+      total_recaudado:            totalRecaudado,
+      total_retiros:              totalRetiros,
+      total_ingresos:             totalIngresos,
       efectivo_esperado_en_cajon: efectivo_esperado,
     });
   } catch (error) {
@@ -133,7 +157,7 @@ export async function cerrarCaja(
       return reply.status(400).send({ error: 'Esa caja no tiene ninguna sesión abierta' });
     }
 
-    const { resumenPagos, totalRecaudado, efectivo_esperado } =
+    const { resumenPagos, totalRecaudado, efectivo_esperado, totalRetiros, totalIngresos } =
       await calcularResumenSesion(sesionAbierta.id, sesionAbierta.monto_inicial);
 
     const diferencia = montoContado - efectivo_esperado;
@@ -158,8 +182,10 @@ export async function cerrarCaja(
 
     return reply.send({
       sesion: sesionCerrada,
-      resumen_pagos: resumenPagos,
-      total_recaudado: totalRecaudado,
+      resumen_pagos:    resumenPagos,
+      total_recaudado:  totalRecaudado,
+      total_retiros:    totalRetiros,
+      total_ingresos:   totalIngresos,
       efectivo_esperado,
       diferencia,
       mensaje,
@@ -180,6 +206,47 @@ export async function getCajas(
   } catch (error) {
     request.log.error(error);
     return reply.status(500).send({ error: 'Error al obtener las cajas' });
+  }
+}
+
+export async function registrarMovimiento(
+  request: FastifyRequest<{ Params: CajaParams; Body: MovimientoCajaBody }>,
+  reply: FastifyReply
+) {
+  try {
+    const { caja_id }             = request.params;
+    const { monto, motivo, tipo } = request.body;
+
+    if (!monto || !Number.isFinite(Number(monto)) || Number(monto) <= 0) {
+      return reply.status(400).send({ error: 'El campo monto debe ser un número positivo' });
+    }
+    if (!motivo || motivo.trim() === '') {
+      return reply.status(400).send({ error: 'El campo motivo es requerido' });
+    }
+    if (tipo !== 'RETIRO' && tipo !== 'INGRESO') {
+      return reply.status(400).send({ error: 'El campo tipo debe ser RETIRO o INGRESO' });
+    }
+
+    const sesionAbierta = await prisma.sesionCaja.findFirst({
+      where: { caja_id, estado: 'ABIERTA' },
+    });
+    if (!sesionAbierta) {
+      return reply.status(400).send({ error: 'Esa caja no tiene ninguna sesión abierta' });
+    }
+
+    const movimiento = await prisma.movimientoCaja.create({
+      data: {
+        monto:     Number(monto),
+        motivo:    motivo.trim(),
+        tipo,
+        sesion_id: sesionAbierta.id,
+      },
+    });
+
+    return reply.status(201).send(movimiento);
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({ error: 'Error al registrar el movimiento de caja' });
   }
 }
 

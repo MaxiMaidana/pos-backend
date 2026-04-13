@@ -47,10 +47,11 @@ export async function createComanda(
     const venta = await prisma.$transaction(async (tx) => {
       const nuevaVenta = await tx.venta.create({
         data: {
-          estado: 'PENDIENTE',
+          estado:          'PENDIENTE',
           vendedor_nombre,
           total,
           descuento_total,
+          tienda_id: TIENDA_LOCAL_ID,
         },
       });
 

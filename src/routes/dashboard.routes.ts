@@ -119,7 +119,7 @@ async function getAnaliticas(
         orderBy: { _count: { vendedor_nombre: 'desc' } },
       }),
 
-      // 4. Sesiones de caja del día — incluye PAGADAS y ANULADAS con sus pagos
+      // 4. Sesiones de caja del día — incluye PAGADAS y ANULADAS con sus pagos y movimientos
       prisma.sesionCaja.findMany({
         where: { fecha_apertura: rango },
         include: {
@@ -128,6 +128,7 @@ async function getAnaliticas(
             where: { estado: { in: ['PAGADA', 'ANULADA'] } },
             include: { pagos: true },
           },
+          movimientos: true,
         },
       }),
     ]);
@@ -164,7 +165,17 @@ async function getAnaliticas(
       }
 
       const efectivoVentas = desglosePagos['EFECTIVO'] ?? 0;
-      const monto_esperado = sesion.monto_inicial + efectivoVentas;
+
+      // Sumar retiros e ingresos manuales de caja
+      const totalRetiros = sesion.movimientos
+        .filter((m) => m.tipo === 'RETIRO')
+        .reduce((acc, m) => acc + m.monto, 0);
+      const totalIngresos = sesion.movimientos
+        .filter((m) => m.tipo === 'INGRESO')
+        .reduce((acc, m) => acc + m.monto, 0);
+
+      const monto_esperado =
+        sesion.monto_inicial + efectivoVentas - totalRetiros + totalIngresos;
 
       let diferencia: number | null = null;
       let resultado: 'Exacto' | 'Sobrante' | 'Faltante' | 'Pendiente de cierre' =
@@ -189,6 +200,8 @@ async function getAnaliticas(
         monto_inicial: sesion.monto_inicial,
         monto_cierre:  sesion.monto_efectivo_cierre ?? null,
         desglosePagos,
+        retiros:       totalRetiros,
+        ingresos:      totalIngresos,
         monto_esperado,
         diferencia,
         resultado,
