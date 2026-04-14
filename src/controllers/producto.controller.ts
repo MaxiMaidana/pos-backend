@@ -16,6 +16,10 @@ interface CreateProductoBody {
   precio_actual: number;
   stock: number;
   codigo_barras?: string;
+  costo?: number;
+  marca?: string;
+  categoria?: string;
+  proveedor?: string;
 }
 
 interface ImportProductoItem {
@@ -23,6 +27,16 @@ interface ImportProductoItem {
   precio_actual: number;
   stock: number;
   codigo_barras?: string;
+  // Campos nuevos — nombres canonínicos
+  costo?: number | string;
+  marca?: string;
+  categoria?: string;
+  proveedor?: string;
+  // Aliases de las columnas del Excel del cliente (mayúsculas)
+  COSTO?: string | number;
+  MARCA?: string;
+  MODELO?: string; // se mapea a categoria
+  PROVEEDOR?: string;
 }
 
 interface ImportProductosBody {
@@ -34,6 +48,10 @@ interface UpdateProductoBody {
   precio_actual?: number;
   stock?: number;
   codigo_barras?: string;
+  costo?: number;
+  marca?: string;
+  categoria?: string;
+  proveedor?: string;
 }
 
 interface ProductoParams {
@@ -118,11 +136,20 @@ export async function createProducto(
   reply: FastifyReply
 ) {
   try {
-    const { nombre, precio_actual, stock, codigo_barras } = request.body;
+    const { nombre, precio_actual, stock, codigo_barras, costo, marca, categoria, proveedor } = request.body;
 
     const producto = await prisma.$transaction(async (tx) => {
       const nuevo = await tx.producto.create({
-        data: { nombre, precio_actual, codigo_barras, synced_at: null },
+        data: {
+          nombre,
+          precio_actual,
+          codigo_barras,
+          costo:     costo     ?? 0,
+          marca:     marca     ?? null,
+          categoria: categoria ?? null,
+          proveedor: proveedor ?? null,
+          synced_at: null,
+        },
       });
 
       await tx.stockTienda.create({
@@ -148,7 +175,7 @@ export async function updateProducto(
 ) {
   try {
     const { id } = request.params;
-    const { nombre, precio_actual, stock, codigo_barras } = request.body;
+    const { nombre, precio_actual, stock, codigo_barras, costo, marca, categoria, proveedor } = request.body;
 
     const producto = await prisma.$transaction(async (tx) => {
       await tx.producto.update({
@@ -157,6 +184,10 @@ export async function updateProducto(
           ...(nombre        !== undefined && { nombre }),
           ...(precio_actual !== undefined && { precio_actual }),
           ...(codigo_barras !== undefined && { codigo_barras }),
+          ...(costo         !== undefined && { costo }),
+          ...(marca         !== undefined && { marca }),
+          ...(categoria     !== undefined && { categoria }),
+          ...(proveedor     !== undefined && { proveedor }),
           synced_at: null,
         },
       });
@@ -227,6 +258,44 @@ export async function toggleActivo(
 
 const IMPORT_BATCH_SIZE = 500;
 
+/**
+ * Limpia un valor monetario que puede venir como "$1,234.56" o "1234,56"
+ * y lo convierte a Float. Devuelve 0 si no es parseable.
+ */
+function parseCosto(raw: string | number | undefined | null): number {
+  if (raw == null) return 0;
+  const cleaned = String(raw).replace(/[$\s]/g, '').replace(/,/g, '');
+  const value = parseFloat(cleaned);
+  return Number.isFinite(value) ? value : 0;
+}
+
+/**
+ * Normaliza un item del CSV al formato interno.
+ * Acepta tanto los nombres canónicos como los alias del Excel del cliente:
+ *   COSTO → costo, MARCA → marca, MODELO → categoria, PROVEEDOR → proveedor
+ */
+function normalizarItem(raw: ImportProductoItem): {
+  nombre: string;
+  precio_actual: number;
+  stock: number;
+  codigo_barras?: string;
+  costo: number;
+  marca:     string | null;
+  categoria: string | null;
+  proveedor: string | null;
+} {
+  return {
+    nombre:        raw.nombre,
+    precio_actual: Number(raw.precio_actual),
+    stock:         Number(raw.stock),
+    codigo_barras: raw.codigo_barras || undefined,
+    costo:         parseCosto(raw.COSTO ?? raw.costo),
+    marca:         (raw.MARCA     ?? raw.marca     ?? null) as string | null,
+    categoria:     (raw.MODELO    ?? raw.categoria ?? null) as string | null,
+    proveedor:     (raw.PROVEEDOR ?? raw.proveedor ?? null) as string | null,
+  };
+}
+
 export async function importarProductos(
   request: FastifyRequest<{ Body: ImportProductosBody }>,
   reply: FastifyReply
@@ -263,7 +332,8 @@ export async function importarProductos(
       const lote = productos.slice(i, i + IMPORT_BATCH_SIZE).filter(Boolean) as ImportProductoItem[];
 
       await prisma.$transaction(async (tx) => {
-        for (const p of lote) {
+        for (const raw of lote) {
+          const p = normalizarItem(raw);
           let productoId: string;
 
           if (p.codigo_barras) {
@@ -276,7 +346,15 @@ export async function importarProductos(
             if (existente) {
               await tx.producto.update({
                 where: { id: existente.id },
-                data:  { nombre: p.nombre, precio_actual: Number(p.precio_actual), synced_at: null },
+                data:  {
+                  nombre:        p.nombre,
+                  precio_actual: p.precio_actual,
+                  costo:         p.costo,
+                  marca:         p.marca,
+                  categoria:     p.categoria,
+                  proveedor:     p.proveedor,
+                  synced_at:     null,
+                },
               });
               productoId = existente.id;
               actualizados++;
@@ -284,8 +362,12 @@ export async function importarProductos(
               const nuevo = await tx.producto.create({
                 data: {
                   nombre:        p.nombre,
-                  precio_actual: Number(p.precio_actual),
+                  precio_actual: p.precio_actual,
                   codigo_barras: p.codigo_barras,
+                  costo:         p.costo,
+                  marca:         p.marca,
+                  categoria:     p.categoria,
+                  proveedor:     p.proveedor,
                   activo:        true,
                   eliminado:     false,
                   synced_at:     null,
@@ -299,7 +381,11 @@ export async function importarProductos(
             const nuevo = await tx.producto.create({
               data: {
                 nombre:        p.nombre,
-                precio_actual: Number(p.precio_actual),
+                precio_actual: p.precio_actual,
+                costo:         p.costo,
+                marca:         p.marca,
+                categoria:     p.categoria,
+                proveedor:     p.proveedor,
                 activo:        true,
                 eliminado:     false,
                 synced_at:     null,
@@ -312,8 +398,8 @@ export async function importarProductos(
           // Registra o actualiza el stock en esta tienda
           await tx.stockTienda.upsert({
             where:  { producto_id_tienda_id: { producto_id: productoId, tienda_id: TIENDA_LOCAL_ID! } },
-            update: { cantidad: Number(p.stock) },
-            create: { producto_id: productoId, tienda_id: TIENDA_LOCAL_ID!, cantidad: Number(p.stock) },
+            update: { cantidad: p.stock },
+            create: { producto_id: productoId, tienda_id: TIENDA_LOCAL_ID!, cantidad: p.stock },
           });
         }
       });
@@ -353,13 +439,17 @@ export async function exportarProductos(
       include: { stocks: { where: { tienda_id: TIENDA_LOCAL_ID! } } },
     });
 
-    const HEADERS = ['codigo_barras', 'nombre', 'precio_actual', 'stock', 'activo'];
+    const HEADERS = ['codigo_barras', 'nombre', 'precio_actual', 'costo', 'marca', 'categoria', 'proveedor', 'stock', 'activo'];
     const rows = productos.map(p => {
       const stockLocal = p.stocks[0]?.cantidad ?? 0;
       return [
         csvCell(p.codigo_barras),
         csvCell(p.nombre),
         csvCell(p.precio_actual),
+        csvCell(p.costo),
+        csvCell(p.marca),
+        csvCell(p.categoria),
+        csvCell(p.proveedor),
         csvCell(stockLocal),
         csvCell(p.activo),
       ].join(',');

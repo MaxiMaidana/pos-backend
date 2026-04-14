@@ -24,6 +24,10 @@ model Producto {
   codigo_barras   String?       @unique
   nombre          String
   precio_actual   Float
+  costo           Float         @default(0)
+  marca           String?
+  categoria       String?
+  proveedor       String?
   activo          Boolean       @default(true)
   eliminado       Boolean       @default(false)
   updated_at      DateTime      @updatedAt @default(now())

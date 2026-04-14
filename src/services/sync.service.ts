@@ -158,6 +158,7 @@ export async function syncVentasToCloud(): Promise<void> {
         const { error: eSesion } = await supabase.from('SesionCaja').upsert({
           ...sesionData,
           cajero_nombre: sesionData.cajero_nombre || 'Cajero Desconocido',
+          tienda_id:     sesionData.tienda_id,
         });
         if (eSesion) throw new Error(`SesionCaja upsert: ${eSesion.message}`);
       }
@@ -180,6 +181,7 @@ export async function syncVentasToCloud(): Promise<void> {
         created_at:      venta.created_at,
         updated_at:      venta.updated_at,
         sesion_id:       venta.sesion_id,
+        tienda_id:       venta.tienda_id,
       });
       if (eVenta) throw new Error(`Venta upsert: ${eVenta.message}`);
 
@@ -296,6 +298,7 @@ export async function syncSesionesCajaToCloud(): Promise<void> {
         monto_efectivo_cierre: sesion.monto_efectivo_cierre,
         diferencia:            sesion.diferencia,
         caja_id:               sesion.caja_id,
+        tienda_id:             sesion.tienda_id,
         updated_at:            sesion.updated_at,
       });
       if (error) throw new Error(error.message);
