@@ -259,20 +259,39 @@ export async function toggleActivo(
 const IMPORT_BATCH_SIZE = 500;
 
 /**
- * Limpia un valor monetario que puede venir como "$1,234.56" o "1234,56"
- * y lo convierte a Float. Devuelve 0 si no es parseable.
+ * Convierte un valor monetario a Float.
+ * Soporta:
+ *   Formato AR:  "$7.686,00"  → 7686
+ *   Formato US:  "$1,234.56"  → 1234.56
+ *   Limpio:      "7686"       → 7686
  */
 function parseCosto(raw: string | number | undefined | null): number {
   if (raw == null) return 0;
-  const cleaned = String(raw).replace(/[$\s]/g, '').replace(/,/g, '');
-  const value = parseFloat(cleaned);
+  const str = String(raw).replace(/[$\s]/g, '').trim();
+  if (!str) return 0;
+
+  const lastComma = str.lastIndexOf(',');
+  const lastDot   = str.lastIndexOf('.');
+
+  let normalized: string;
+  if (lastComma > lastDot) {
+    // Formato AR: "7.686,00" — coma es decimal, punto es separador de miles
+    normalized = str.replace(/\./g, '').replace(',', '.');
+  } else if (lastDot > lastComma) {
+    // Formato US/limpio: "1,234.56" — punto es decimal, coma es separador de miles
+    normalized = str.replace(/,/g, '');
+  } else {
+    normalized = str.replace(',', '.');
+  }
+
+  const value = parseFloat(normalized);
   return Number.isFinite(value) ? value : 0;
 }
 
 /**
  * Normaliza un item del CSV al formato interno.
- * Acepta tanto los nombres canónicos como los alias del Excel del cliente:
- *   COSTO → costo, MARCA → marca, MODELO → categoria, PROVEEDOR → proveedor
+ * Soporta nombres canónicos (codigo_barras, nombre, precio_actual, costo…)
+ * y aliases del Excel del cliente (CODIGO, PRODUCTO, VENTA, MODELO, etc.).
  */
 function normalizarItem(raw: ImportProductoItem): {
   nombre: string;
@@ -284,15 +303,16 @@ function normalizarItem(raw: ImportProductoItem): {
   categoria: string | null;
   proveedor: string | null;
 } {
+  const r = raw as any;
   return {
-    nombre:        raw.nombre,
-    precio_actual: Number(raw.precio_actual),
-    stock:         Number(raw.stock),
-    codigo_barras: raw.codigo_barras || undefined,
-    costo:         parseCosto(raw.COSTO ?? raw.costo),
-    marca:         (raw.MARCA     ?? raw.marca     ?? null) as string | null,
-    categoria:     (raw.MODELO    ?? raw.categoria ?? null) as string | null,
-    proveedor:     (raw.PROVEEDOR ?? raw.proveedor ?? null) as string | null,
+    nombre:        String(r.PRODUCTO    ?? r.nombre        ?? ''),
+    precio_actual: parseCosto(r.VENTA   ?? r.SUGERIDO      ?? r.precio_actual),
+    stock:         r.stock != null ? Number(r.stock) : 0,
+    codigo_barras: (r.CODIGO ?? r.codigo_barras) || undefined,
+    costo:         parseCosto(r.COSTO   ?? r.costo),
+    marca:         (r.MARCA     ?? r.marca     ?? null) as string | null,
+    categoria:     (r.MODELO    ?? r.categoria ?? null) as string | null,
+    proveedor:     (r.PROVEEDOR ?? r.proveedor ?? null) as string | null,
   };
 }
 
@@ -309,19 +329,16 @@ export async function importarProductos(
 
     const filasInvalidas: number[] = [];
     for (let i = 0; i < productos.length; i++) {
-      const p = productos[i];
-      if (
-        !p ||
-        !p.nombre ||
-        p.precio_actual == null || !Number.isFinite(Number(p.precio_actual)) ||
-        p.stock == null        || !Number.isFinite(Number(p.stock))
-      ) {
+      const raw = productos[i];
+      if (!raw) { filasInvalidas.push(i + 1); continue; }
+      const p = normalizarItem(raw);
+      if (!p.nombre || !Number.isFinite(p.precio_actual) || p.precio_actual <= 0) {
         filasInvalidas.push(i + 1);
       }
     }
     if (filasInvalidas.length > 0) {
       return reply.status(400).send({
-        error: `Filas con datos inválidos (nombre, precio_actual o stock faltantes): ${filasInvalidas.slice(0, 20).join(', ')}${filasInvalidas.length > 20 ? '...' : ''}`,
+        error: `Filas con datos inválidos (nombre o precio_actual faltantes): ${filasInvalidas.slice(0, 20).join(', ')}${filasInvalidas.length > 20 ? '...' : ''}`,
       });
     }
 
