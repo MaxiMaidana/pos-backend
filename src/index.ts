@@ -17,7 +17,7 @@ import { authRoutes } from './routes/auth.routes.js';
 
 const SYNC_INTERVAL_MS = 60_000;
 
-const fastify = Fastify({ logger: true });
+const fastify = Fastify({ logger: true, bodyLimit: 50 * 1024 * 1024 }); // 50 MB — permite importar catálogos grandes
 
 const start = async () => {
   try {
