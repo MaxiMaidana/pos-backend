@@ -109,8 +109,8 @@ export async function getProductos(
           FROM "Producto" p
           LEFT JOIN "StockTienda" st
             ON st.producto_id = p.id AND st.tienda_id = ${tienda_id}
-          WHERE p.activo = 1
-            AND p.eliminado = 0
+          WHERE p.activo = true
+            AND p.eliminado = false
             AND (st.cantidad IS NULL OR st.cantidad <= p.stock_minimo)
         `;
         stockBajoIds = rows.map(r => r.id);
@@ -126,8 +126,8 @@ export async function getProductos(
           const rows = await prisma.$queryRaw<{ id: string }[]>`
             SELECT p.id
             FROM "Producto" p
-            WHERE p.activo = 1
-              AND p.eliminado = 0
+            WHERE p.activo = true
+              AND p.eliminado = false
               AND (
                 EXISTS (
                   SELECT 1 FROM "StockTienda" st
