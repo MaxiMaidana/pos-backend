@@ -83,8 +83,8 @@ async function getDashboardStats(
         FROM "Producto" p
         LEFT JOIN "StockTienda" st
           ON st.producto_id = p.id AND st.tienda_id = ${filtrotiendaId}
-        WHERE p.activo = 1
-          AND p.eliminado = 0
+        WHERE p.activo = true
+          AND p.eliminado = false
           AND (st.cantidad IS NULL OR st.cantidad <= p.stock_minimo)
       `;
       productosStockBajo = Number(rows[0]?.count ?? 0);
@@ -103,8 +103,8 @@ async function getDashboardStats(
         const rows = await prisma.$queryRaw<{ count: bigint }[]>`
           SELECT COUNT(DISTINCT p.id) AS count
           FROM "Producto" p
-          WHERE p.activo = 1
-            AND p.eliminado = 0
+          WHERE p.activo = true
+            AND p.eliminado = false
             AND (
               -- Tiene al menos una tienda con stock bajo
               EXISTS (
