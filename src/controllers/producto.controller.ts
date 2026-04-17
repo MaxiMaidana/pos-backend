@@ -102,6 +102,9 @@ export async function getProductos(
         OR: [
           { nombre:        { contains: search } },
           { codigo_barras: { contains: search } },
+          { marca:         { contains: search } },
+          { categoria:     { contains: search } },
+          { proveedor:     { contains: search } },
         ],
       }),
       // Filtra por stock bajo en esta tienda usando la relación anidada
