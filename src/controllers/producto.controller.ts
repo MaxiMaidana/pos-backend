@@ -20,6 +20,7 @@ interface CreateProductoBody {
   marca?: string;
   categoria?: string;
   proveedor?: string;
+  stock_minimo?: number;
 }
 
 interface ImportProductoItem {
@@ -27,16 +28,18 @@ interface ImportProductoItem {
   precio_actual: number;
   stock: number;
   codigo_barras?: string;
-  // Campos nuevos — nombres canonínicos
+  // Campos nuevos — nombres canónicos
   costo?: number | string;
   marca?: string;
   categoria?: string;
   proveedor?: string;
+  stock_minimo?: number | string;
   // Aliases de las columnas del Excel del cliente (mayúsculas)
   COSTO?: string | number;
   MARCA?: string;
   MODELO?: string; // se mapea a categoria
   PROVEEDOR?: string;
+  STOCK_MINIMO?: string | number;
 }
 
 interface ImportProductosBody {
@@ -52,6 +55,7 @@ interface UpdateProductoBody {
   marca?: string;
   categoria?: string;
   proveedor?: string;
+  stock_minimo?: number;
 }
 
 interface ProductoParams {
@@ -64,6 +68,7 @@ interface GetProductosQuery {
   search?:      string;
   stockBajo?:   string;
   soloActivos?: string;
+  tienda_id?:   string;
 }
 
 // ── Helper ────────────────────────────────────────────────────────────────────
@@ -93,7 +98,53 @@ export async function getProductos(
     const limit = Math.max(1, parseInt(request.query.limit ?? '20', 10));
     const skip  = (page - 1) * limit;
 
-    const { search, stockBajo, soloActivos } = request.query;
+    const { search, stockBajo, soloActivos, tienda_id } = request.query;
+
+    let stockBajoIds: string[] | undefined;
+    if (stockBajo === 'true') {
+      if (tienda_id) {
+        // Vista por sucursal: LEFT JOIN para capturar productos sin registro (stock = 0).
+        const rows = await prisma.$queryRaw<{ id: string }[]>`
+          SELECT p.id
+          FROM "Producto" p
+          LEFT JOIN "StockTienda" st
+            ON st.producto_id = p.id AND st.tienda_id = ${tienda_id}
+          WHERE p.activo = 1
+            AND p.eliminado = 0
+            AND (st.cantidad IS NULL OR st.cantidad <= p.stock_minimo)
+        `;
+        stockBajoIds = rows.map(r => r.id);
+      } else {
+        // Vista global: un producto aparece si en AL MENOS UNA tienda tiene stock bajo
+        // o le falta el registro de stock en alguna tienda activa.
+        const tiendas = await prisma.tienda.findMany({ select: { id: true } });
+        const totalTiendas = tiendas.length;
+
+        if (totalTiendas === 0) {
+          stockBajoIds = [];
+        } else {
+          const rows = await prisma.$queryRaw<{ id: string }[]>`
+            SELECT p.id
+            FROM "Producto" p
+            WHERE p.activo = 1
+              AND p.eliminado = 0
+              AND (
+                EXISTS (
+                  SELECT 1 FROM "StockTienda" st
+                  WHERE st.producto_id = p.id
+                    AND st.cantidad <= p.stock_minimo
+                )
+                OR
+                (
+                  SELECT COUNT(*) FROM "StockTienda" st
+                  WHERE st.producto_id = p.id
+                ) < ${totalTiendas}
+              )
+          `;
+          stockBajoIds = rows.map(r => r.id);
+        }
+      }
+    }
 
     const where: Prisma.ProductoWhereInput = {
       eliminado: false,
@@ -107,10 +158,8 @@ export async function getProductos(
           { proveedor:     { contains: search } },
         ],
       }),
-      // Filtra por stock bajo en esta tienda usando la relación anidada
-      ...(stockBajo === 'true' && {
-        stocks: { some: { tienda_id: TIENDA_LOCAL_ID, cantidad: { lte: 5 } } },
-      }),
+      // Filtra por stock bajo: usa raw SQL con LEFT JOIN + stock_minimo por producto.
+      ...(stockBajoIds !== undefined && { id: { in: stockBajoIds } }),
     };
 
     const [total, data] = await prisma.$transaction([
@@ -139,7 +188,7 @@ export async function createProducto(
   reply: FastifyReply
 ) {
   try {
-    const { nombre, precio_actual, stock, codigo_barras, costo, marca, categoria, proveedor } = request.body;
+    const { nombre, precio_actual, stock, codigo_barras, costo, marca, categoria, proveedor, stock_minimo } = request.body;
 
     const producto = await prisma.$transaction(async (tx) => {
       const nuevo = await tx.producto.create({
@@ -147,11 +196,12 @@ export async function createProducto(
           nombre,
           precio_actual,
           codigo_barras,
-          costo:     costo     ?? 0,
-          marca:     marca     ?? null,
-          categoria: categoria ?? null,
-          proveedor: proveedor ?? null,
-          synced_at: null,
+          costo:        costo        ?? 0,
+          marca:        marca        ?? null,
+          categoria:    categoria    ?? null,
+          proveedor:    proveedor    ?? null,
+          stock_minimo: stock_minimo ?? 5,
+          synced_at:    null,
         },
       });
 
@@ -178,7 +228,7 @@ export async function updateProducto(
 ) {
   try {
     const { id } = request.params;
-    const { nombre, precio_actual, stock, codigo_barras, costo, marca, categoria, proveedor } = request.body;
+    const { nombre, precio_actual, stock, codigo_barras, costo, marca, categoria, proveedor, stock_minimo } = request.body;
 
     const producto = await prisma.$transaction(async (tx) => {
       await tx.producto.update({
@@ -191,6 +241,7 @@ export async function updateProducto(
           ...(marca         !== undefined && { marca }),
           ...(categoria     !== undefined && { categoria }),
           ...(proveedor     !== undefined && { proveedor }),
+          ...(stock_minimo  !== undefined && { stock_minimo }),
           synced_at: null,
         },
       });
@@ -302,11 +353,13 @@ function normalizarItem(raw: ImportProductoItem): {
   stock: number;
   codigo_barras?: string;
   costo: number;
-  marca:     string | null;
-  categoria: string | null;
-  proveedor: string | null;
+  marca:        string | null;
+  categoria:    string | null;
+  proveedor:    string | null;
+  stock_minimo: number;
 } {
   const r = raw as any;
+  const rawMin = r.STOCK_MINIMO ?? r.stock_minimo;
   return {
     nombre:        String(r.PRODUCTO    ?? r.nombre        ?? ''),
     precio_actual: parseCosto(r.VENTA   ?? r.SUGERIDO      ?? r.precio_actual),
@@ -316,6 +369,7 @@ function normalizarItem(raw: ImportProductoItem): {
     marca:         (r.MARCA     ?? r.marca     ?? null) as string | null,
     categoria:     (r.MODELO    ?? r.categoria ?? null) as string | null,
     proveedor:     (r.PROVEEDOR ?? r.proveedor ?? null) as string | null,
+    stock_minimo:  rawMin != null && Number.isFinite(Number(rawMin)) ? Number(rawMin) : 5,
   };
 }
 
@@ -373,6 +427,7 @@ export async function importarProductos(
                   marca:         p.marca,
                   categoria:     p.categoria,
                   proveedor:     p.proveedor,
+                  stock_minimo:  p.stock_minimo,
                   synced_at:     null,
                 },
               });
@@ -388,6 +443,7 @@ export async function importarProductos(
                   marca:         p.marca,
                   categoria:     p.categoria,
                   proveedor:     p.proveedor,
+                  stock_minimo:  p.stock_minimo,
                   activo:        true,
                   eliminado:     false,
                   synced_at:     null,
@@ -406,6 +462,7 @@ export async function importarProductos(
                 marca:         p.marca,
                 categoria:     p.categoria,
                 proveedor:     p.proveedor,
+                stock_minimo:  p.stock_minimo,
                 activo:        true,
                 eliminado:     false,
                 synced_at:     null,

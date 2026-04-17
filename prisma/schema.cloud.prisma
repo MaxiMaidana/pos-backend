@@ -38,6 +38,7 @@ model Producto {
   proveedor       String?
   activo          Boolean       @default(true)
   eliminado       Boolean       @default(false)
+  stock_minimo    Int           @default(5)
   updated_at      DateTime      @updatedAt @default(now())
   synced_at       DateTime?
 

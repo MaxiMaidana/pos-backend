@@ -31,7 +31,7 @@ async function getDashboardStats(
       ...(filtrotiendaId && { tienda_id: filtrotiendaId }),
     };
 
-    const [ventasTotales, ventasCanceladas, recaudacion, productosStockBajo, pagosPorMetodo] =
+    const [ventasTotales, ventasCanceladas, recaudacion, pagosPorMetodo] =
       await prisma.$transaction([
         // Ventas efectivamente cobradas en la fecha
         prisma.venta.count({ where: whereVentasPagadas }),
@@ -51,21 +51,6 @@ async function getDashboardStats(
           _sum: { total: true },
         }),
 
-        // Stock crítico — filtra por tienda si se pide, si no muestra cualquier tienda
-        prisma.producto.count({
-          where: {
-            activo: true,
-            stocks: {
-              some: {
-                cantidad: { lte: 5 },
-                ...(filtrotiendaId
-                  ? { tienda_id: filtrotiendaId }
-                  : {}),
-              },
-            },
-          },
-        }),
-
         // Desglose de pagos agrupado por método
         prisma.pago.groupBy({
           by: ['metodo'],
@@ -80,6 +65,64 @@ async function getDashboardStats(
           orderBy:  { metodo: 'asc' },
         }),
       ]);
+
+    // Stock crítico — usa LEFT JOIN para capturar productos sin registro en StockTienda
+    // (cantidad NULL = stock 0, que también es stock bajo).
+    //
+    // Vista por sucursal: un producto aparece si su cantidad en esa tienda es <= stock_minimo
+    //                     OR directamente no tiene fila en StockTienda para esa tienda.
+    //
+    // Vista global: un producto aparece si EN AL MENOS UNA tienda su cantidad es <= stock_minimo,
+    //               O si le falta el registro de stock en alguna tienda (LEFT JOIN → NULL).
+    let productosStockBajo: number;
+
+    if (filtrotiendaId) {
+      // Vista por sucursal: LEFT JOIN filtrando por tienda concreta.
+      const rows = await prisma.$queryRaw<{ count: bigint }[]>`
+        SELECT COUNT(DISTINCT p.id) AS count
+        FROM "Producto" p
+        LEFT JOIN "StockTienda" st
+          ON st.producto_id = p.id AND st.tienda_id = ${filtrotiendaId}
+        WHERE p.activo = 1
+          AND p.eliminado = 0
+          AND (st.cantidad IS NULL OR st.cantidad <= p.stock_minimo)
+      `;
+      productosStockBajo = Number(rows[0]?.count ?? 0);
+    } else {
+      // Vista global: obtenemos todos los ids de tiendas activas y el stock por producto.
+      // Un producto alerta si en CUALQUIER tienda tiene stock <= stock_minimo o no tiene registro.
+      const tiendas = await prisma.tienda.findMany({ select: { id: true } });
+      const totalTiendas = tiendas.length;
+
+      if (totalTiendas === 0) {
+        productosStockBajo = 0;
+      } else {
+        // Contamos cuántas filas de StockTienda tiene cada producto y cuántas están bien.
+        // "bien" = tiene registro Y cantidad > stock_minimo.
+        // Si filasOk < totalTiendas → hay al menos una tienda con problema.
+        const rows = await prisma.$queryRaw<{ count: bigint }[]>`
+          SELECT COUNT(DISTINCT p.id) AS count
+          FROM "Producto" p
+          WHERE p.activo = 1
+            AND p.eliminado = 0
+            AND (
+              -- Tiene al menos una tienda con stock bajo
+              EXISTS (
+                SELECT 1 FROM "StockTienda" st
+                WHERE st.producto_id = p.id
+                  AND st.cantidad <= p.stock_minimo
+              )
+              OR
+              -- Le falta el registro en alguna tienda (stock implícito = 0 <= stock_minimo)
+              (
+                SELECT COUNT(*) FROM "StockTienda" st
+                WHERE st.producto_id = p.id
+              ) < ${totalTiendas}
+            )
+        `;
+        productosStockBajo = Number(rows[0]?.count ?? 0);
+      }
+    }
 
     // Convertir el array de groupBy en un objeto clave→monto
     const desglosePagosGlobal: Record<string, number> = {};
