@@ -20,6 +20,8 @@ interface CreateComandaBody {
   vendedor_nombre: string;
   descuento_total: number;
   detalles: DetalleInput[];
+  estado?: 'PENDIENTE' | 'BORRADOR';
+  cliente_nombre?: string;
 }
 
 interface CobrarVentaBody {
@@ -36,7 +38,7 @@ export async function createComanda(
   reply: FastifyReply
 ) {
   try {
-    const { vendedor_nombre, descuento_total, detalles } = request.body;
+    const { vendedor_nombre, descuento_total, detalles, estado = 'PENDIENTE', cliente_nombre } = request.body;
 
     const subtotalBruto = detalles.reduce(
       (sum, d) => sum + d.cantidad * d.precio_unitario_historico,
@@ -47,8 +49,9 @@ export async function createComanda(
     const venta = await prisma.$transaction(async (tx) => {
       const nuevaVenta = await tx.venta.create({
         data: {
-          estado:          'PENDIENTE',
+          estado,
           vendedor_nombre,
+          cliente_nombre: cliente_nombre ?? null,
           total,
           descuento_total,
           tienda_id: TIENDA_LOCAL_ID,
@@ -65,11 +68,14 @@ export async function createComanda(
         })),
       });
 
-      for (const detalle of detalles) {
-        await tx.stockTienda.updateMany({
-          where: { producto_id: detalle.producto_id, tienda_id: TIENDA_LOCAL_ID },
-          data:  { cantidad: { decrement: detalle.cantidad } },
-        });
+      // Los BORRADOR no descuentan stock: el stock se descuenta al cobrar.
+      if (estado !== 'BORRADOR') {
+        for (const detalle of detalles) {
+          await tx.stockTienda.updateMany({
+            where: { producto_id: detalle.producto_id, tienda_id: TIENDA_LOCAL_ID },
+            data:  { cantidad: { decrement: detalle.cantidad } },
+          });
+        }
       }
 
       return tx.venta.findUnique({
@@ -125,12 +131,13 @@ export async function cobrarVenta(
     const { id } = request.params;
     const { caja_id, pagos } = request.body;
 
-    const venta = await prisma.venta.findUnique({ where: { id } });
+    const venta = await prisma.venta.findUnique({ where: { id }, include: { detalles: true } });
 
     if (!venta) {
       return reply.status(404).send({ error: 'Venta no encontrada' });
     }
-    if (venta.estado !== 'PENDIENTE') {
+    const esBorrador = venta.estado === 'BORRADOR';
+    if (venta.estado !== 'PENDIENTE' && !esBorrador) {
       return reply.status(400).send({ error: `La venta ya está en estado ${venta.estado}` });
     }
 
@@ -153,6 +160,16 @@ export async function cobrarVenta(
     }
 
     const ventaCobrada = await prisma.$transaction(async (tx) => {
+      // BORRADOR nunca descontó stock al crearse → descontar ahora al cobrar.
+      if (esBorrador) {
+        for (const detalle of venta.detalles) {
+          await tx.stockTienda.updateMany({
+            where: { producto_id: detalle.producto_id, tienda_id: TIENDA_LOCAL_ID },
+            data:  { cantidad: { decrement: detalle.cantidad } },
+          });
+        }
+      }
+
       await tx.pago.createMany({
         data: pagos.map((p) => ({
           venta_id: id,
@@ -181,6 +198,79 @@ export async function cobrarVenta(
     return reply.status(500).send({ error: 'Error al cobrar la venta' });
   }
 }
+
+// ── Edición de Borradores ────────────────────────────────────────────────────
+
+interface UpdateBorradorBody {
+  vendedor_nombre?: string;
+  cliente_nombre?:  string;
+  descuento_total?: number;
+  detalles: DetalleInput[];
+}
+
+export async function updateBorrador(
+  request: FastifyRequest<{ Params: VentaParams; Body: UpdateBorradorBody }>,
+  reply: FastifyReply
+) {
+  try {
+    const { id } = request.params;
+    const { vendedor_nombre, cliente_nombre, descuento_total, detalles } = request.body;
+
+    const venta = await prisma.venta.findUnique({ where: { id } });
+    if (!venta) {
+      return reply.status(404).send({ error: 'Venta no encontrada' });
+    }
+    if (venta.estado !== 'BORRADOR') {
+      return reply.status(400).send({
+        error: `Solo se pueden editar ventas en estado BORRADOR. Estado actual: ${venta.estado}`,
+      });
+    }
+
+    const subtotalBruto = detalles.reduce(
+      (sum, d) => sum + d.cantidad * d.precio_unitario_historico,
+      0
+    );
+    const nuevoDescuento = descuento_total ?? venta.descuento_total;
+    const total = subtotalBruto - nuevoDescuento;
+
+    const ventaActualizada = await prisma.$transaction(async (tx) => {
+      // Reemplaza todos los detalles (delete + re-insert).
+      await tx.detalleVenta.deleteMany({ where: { venta_id: id } });
+      await tx.detalleVenta.createMany({
+        data: detalles.map((d) => ({
+          venta_id:                 id,
+          producto_id:              d.producto_id,
+          cantidad:                 d.cantidad,
+          precio_unitario_historico: d.precio_unitario_historico,
+          subtotal:                 d.cantidad * d.precio_unitario_historico,
+        })),
+      });
+
+      await tx.venta.update({
+        where: { id },
+        data: {
+          total,
+          descuento_total: nuevoDescuento,
+          synced_at: null,
+          ...(vendedor_nombre !== undefined && { vendedor_nombre }),
+          ...(cliente_nombre  !== undefined && { cliente_nombre }),
+        },
+      });
+
+      return tx.venta.findUnique({
+        where:   { id },
+        include: { detalles: { include: { producto: true } }, pagos: true },
+      });
+    });
+
+    return reply.send(ventaActualizada);
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({ error: 'Error al actualizar el borrador' });
+  }
+}
+
+// ── Historial de Ventas ───────────────────────────────────────────────────────
 
 interface GetVentasQuery {
   page?:            string;
@@ -286,18 +376,21 @@ export async function anularVenta(
     if (!venta) {
       return reply.status(404).send({ error: 'Venta no encontrada' });
     }
-    if (venta.estado !== 'PENDIENTE') {
+    if (venta.estado !== 'PENDIENTE' && venta.estado !== 'BORRADOR') {
       return reply
         .status(400)
-        .send({ error: `Solo se pueden anular ventas en estado PENDIENTE. Estado actual: ${venta.estado}` });
+        .send({ error: `Solo se pueden anular ventas en estado PENDIENTE o BORRADOR. Estado actual: ${venta.estado}` });
     }
 
     await prisma.$transaction(async (tx) => {
-      for (const detalle of venta.detalles) {
-        await tx.stockTienda.updateMany({
-          where: { producto_id: detalle.producto_id, tienda_id: TIENDA_LOCAL_ID },
-          data:  { cantidad: { increment: detalle.cantidad } },
-        });
+      // Solo devuelve stock si era PENDIENTE (BORRADOR nunca lo descontó).
+      if (venta.estado === 'PENDIENTE') {
+        for (const detalle of venta.detalles) {
+          await tx.stockTienda.updateMany({
+            where: { producto_id: detalle.producto_id, tienda_id: TIENDA_LOCAL_ID },
+            data:  { cantidad: { increment: detalle.cantidad } },
+          });
+        }
       }
 
       // Construimos data explícitamente para evitar que el spread con && ignore valores falsy
@@ -329,16 +422,19 @@ export async function cancelarVenta(
     if (!venta) {
       return reply.status(404).send({ error: 'Venta no encontrada' });
     }
-    if (venta.estado !== 'PENDIENTE') {
+    if (venta.estado !== 'PENDIENTE' && venta.estado !== 'BORRADOR') {
       return reply.status(400).send({ error: `La venta ya está en estado ${venta.estado}` });
     }
 
     const ventaCancelada = await prisma.$transaction(async (tx) => {
-      for (const detalle of venta.detalles) {
-        await tx.stockTienda.updateMany({
-          where: { producto_id: detalle.producto_id, tienda_id: TIENDA_LOCAL_ID },
-          data:  { cantidad: { increment: detalle.cantidad } },
-        });
+      // Solo devuelve stock si era PENDIENTE (BORRADOR nunca lo descontó).
+      if (venta.estado === 'PENDIENTE') {
+        for (const detalle of venta.detalles) {
+          await tx.stockTienda.updateMany({
+            where: { producto_id: detalle.producto_id, tienda_id: TIENDA_LOCAL_ID },
+            data:  { cantidad: { increment: detalle.cantidad } },
+          });
+        }
       }
 
       return tx.venta.update({

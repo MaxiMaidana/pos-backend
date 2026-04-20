@@ -27,13 +27,20 @@ export async function syncProductosToCloud(): Promise<void> {
   for (const producto of productos) {
     try {
       const { error } = await supabase.from('Producto').upsert({
-        id:            producto.id,
-        codigo_barras: producto.codigo_barras,
-        nombre:        producto.nombre,
-        precio_actual: producto.precio_actual,
-        activo:        producto.activo,
-        eliminado:     producto.eliminado,
-        updated_at:    producto.updated_at,
+        id:                   producto.id,
+        codigo_barras:        producto.codigo_barras,
+        nombre:               producto.nombre,
+        precio_actual:        producto.precio_actual,
+        costo:                producto.costo,
+        marca:                producto.marca,
+        categoria:            producto.categoria,
+        proveedor:            producto.proveedor,
+        activo:               producto.activo,
+        eliminado:            producto.eliminado,
+        stock_minimo:         producto.stock_minimo,
+        margen:               (producto as Record<string, unknown>).margen ?? null,
+        precio_sin_redondear: (producto as Record<string, unknown>).precio_sin_redondear ?? null,
+        updated_at:           producto.updated_at,
       });
 
       if (error) throw new Error(error.message);
@@ -115,7 +122,8 @@ export async function syncStockTiendaToCloud(): Promise<void> {
 export async function syncVentasToCloud(): Promise<void> {
   // Raw SQL: synced_at IS NULL o updated_at > synced_at (Prisma no soporta comparación entre campos en where)
   const ventasPendientes = await prisma.$queryRaw<{ id: string }[]>`
-    SELECT id FROM "Venta" WHERE synced_at IS NULL OR updated_at > synced_at
+    SELECT id FROM "Venta"
+    WHERE (synced_at IS NULL OR updated_at > synced_at) AND estado != 'BORRADOR'
     LIMIT 100
   `.then(rows =>
     rows.length === 0

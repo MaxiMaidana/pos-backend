@@ -56,11 +56,12 @@ model StockTienda {
 
 model Venta {
   id              String  @id @default(uuid())
-  estado          String  @default("PENDIENTE") // PENDIENTE, PAGADA, CANCELADA, ANULADA
+  estado          String  @default("PENDIENTE") // BORRADOR, PENDIENTE, PAGADA, CANCELADA, ANULADA
   total           Float
   descuento_total Float   @default(0)
 
   vendedor_nombre String
+  cliente_nombre  String?
 
   created_at DateTime  @default(now())
   updated_at DateTime  @updatedAt
