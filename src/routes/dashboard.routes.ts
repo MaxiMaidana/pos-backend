@@ -2,12 +2,26 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../db/prisma.js';
 
 // ── Helper compartido ─────────────────────────────────────────────────────────
+// Argentina es UTC-3 sin DST. Para filtrar correctamente en Vercel (UTC):
+//   00:00:00 AR = 03:00:00 UTC  →  inicio = `${fecha}T03:00:00.000Z`
+//   23:59:59 AR = 02:59:59 UTC del día siguiente → fin = inicio + 24h - 1ms
+//
+// Si el frontend no envía `fecha`, calculamos "hoy en Argentina" manualmente
+// restando 3 horas al reloj UTC del servidor (sin depender del TZ local).
+
+const ARGENTINA_OFFSET_MS = 3 * 60 * 60 * 1000; // UTC-3 → 3h en ms
+
+function toArgentinaDateStr(utcDate: Date): string {
+  // Desplaza el Date al "reloj argentino" y extrae YYYY-MM-DD.
+  const arDate = new Date(utcDate.getTime() - ARGENTINA_OFFSET_MS);
+  return arDate.toISOString().slice(0, 10);
+}
+
 function buildRangoDia(fecha?: string): { gte: Date; lte: Date } {
-  const base = fecha ? new Date(`${fecha}T00:00:00`) : new Date();
-  const inicio = new Date(base);
-  inicio.setHours(0, 0, 0, 0);
-  const fin = new Date(base);
-  fin.setHours(23, 59, 59, 999);
+  const dateStr = fecha ?? toArgentinaDateStr(new Date());
+  // Midnight Argentina (UTC-3) expresado en UTC: sumar 3 horas al string de fecha.
+  const inicio = new Date(`${dateStr}T03:00:00.000Z`);
+  const fin    = new Date(inicio.getTime() + 24 * 60 * 60 * 1000 - 1);
   return { gte: inicio, lte: fin };
 }
 

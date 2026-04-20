@@ -21,6 +21,8 @@ interface CreateProductoBody {
   categoria?: string;
   proveedor?: string;
   stock_minimo?: number;
+  margen?: number;
+  precio_sin_redondear?: number;
 }
 
 interface ImportProductoItem {
@@ -56,6 +58,8 @@ interface UpdateProductoBody {
   categoria?: string;
   proveedor?: string;
   stock_minimo?: number;
+  margen?: number;
+  precio_sin_redondear?: number;
 }
 
 interface ProductoParams {
@@ -69,6 +73,7 @@ interface GetProductosQuery {
   stockBajo?:   string;
   soloActivos?: string;
   tienda_id?:   string;
+  stockExacto?: string;
 }
 
 // ── Helper ────────────────────────────────────────────────────────────────────
@@ -98,9 +103,10 @@ export async function getProductos(
     const limit = Math.max(1, parseInt(request.query.limit ?? '20', 10));
     const skip  = (page - 1) * limit;
 
-    const { search, stockBajo, soloActivos, tienda_id } = request.query;
+    const { search, stockBajo, soloActivos, tienda_id, stockExacto } = request.query;
 
     let stockBajoIds: string[] | undefined;
+    let stockExactoIds: string[] | undefined;
     if (stockBajo === 'true') {
       if (tienda_id) {
         // Vista por sucursal: LEFT JOIN para capturar productos sin registro (stock = 0).
@@ -146,6 +152,35 @@ export async function getProductos(
       }
     }
 
+    if (stockExacto !== undefined) {
+      const cantidad = parseInt(stockExacto, 10);
+      if (!isNaN(cantidad)) {
+        if (tienda_id) {
+          // Por sucursal: filtra por el stock exacto en esa tienda (incluyendo productos sin registro = 0).
+          const rows = await prisma.$queryRaw<{ id: string }[]>`
+            SELECT p.id
+            FROM "Producto" p
+            LEFT JOIN "StockTienda" st
+              ON st.producto_id = p.id AND st.tienda_id = ${tienda_id}
+            WHERE p.eliminado = false
+              AND COALESCE(st.cantidad, 0) = ${cantidad}
+          `;
+          stockExactoIds = rows.map(r => r.id);
+        } else {
+          // Global: filtra por la suma total de stock en todas las tiendas.
+          const rows = await prisma.$queryRaw<{ id: string }[]>`
+            SELECT p.id
+            FROM "Producto" p
+            LEFT JOIN "StockTienda" st ON st.producto_id = p.id
+            WHERE p.eliminado = false
+            GROUP BY p.id
+            HAVING COALESCE(SUM(st.cantidad), 0) = ${cantidad}
+          `;
+          stockExactoIds = rows.map(r => r.id);
+        }
+      }
+    }
+
     const where: Prisma.ProductoWhereInput = {
       eliminado: false,
       ...(soloActivos === 'true' && { activo: true }),
@@ -160,6 +195,8 @@ export async function getProductos(
       }),
       // Filtra por stock bajo: usa raw SQL con LEFT JOIN + stock_minimo por producto.
       ...(stockBajoIds !== undefined && { id: { in: stockBajoIds } }),
+      // Filtra por stock exacto.
+      ...(stockExactoIds !== undefined && { id: { in: stockExactoIds } }),
     };
 
     const [total, data] = await prisma.$transaction([
@@ -188,7 +225,7 @@ export async function createProducto(
   reply: FastifyReply
 ) {
   try {
-    const { nombre, precio_actual, stock, codigo_barras, costo, marca, categoria, proveedor, stock_minimo } = request.body;
+    const { nombre, precio_actual, stock, codigo_barras, costo, marca, categoria, proveedor, stock_minimo, margen, precio_sin_redondear } = request.body;
 
     const producto = await prisma.$transaction(async (tx) => {
       const nuevo = await tx.producto.create({
@@ -196,12 +233,14 @@ export async function createProducto(
           nombre,
           precio_actual,
           codigo_barras,
-          costo:        costo        ?? 0,
-          marca:        marca        ?? null,
-          categoria:    categoria    ?? null,
-          proveedor:    proveedor    ?? null,
-          stock_minimo: stock_minimo ?? 5,
-          synced_at:    null,
+          costo:                costo                ?? 0,
+          marca:                marca                ?? null,
+          categoria:            categoria            ?? null,
+          proveedor:            proveedor            ?? null,
+          stock_minimo:         stock_minimo         ?? 5,
+          margen:               margen               ?? 1,
+          precio_sin_redondear: precio_sin_redondear ?? null,
+          synced_at:            null,
         },
       });
 
@@ -228,20 +267,22 @@ export async function updateProducto(
 ) {
   try {
     const { id } = request.params;
-    const { nombre, precio_actual, stock, codigo_barras, costo, marca, categoria, proveedor, stock_minimo } = request.body;
+    const { nombre, precio_actual, stock, codigo_barras, costo, marca, categoria, proveedor, stock_minimo, margen, precio_sin_redondear } = request.body;
 
     const producto = await prisma.$transaction(async (tx) => {
       await tx.producto.update({
         where: { id },
         data: {
-          ...(nombre        !== undefined && { nombre }),
-          ...(precio_actual !== undefined && { precio_actual }),
-          ...(codigo_barras !== undefined && { codigo_barras }),
-          ...(costo         !== undefined && { costo }),
-          ...(marca         !== undefined && { marca }),
-          ...(categoria     !== undefined && { categoria }),
-          ...(proveedor     !== undefined && { proveedor }),
-          ...(stock_minimo  !== undefined && { stock_minimo }),
+          ...(nombre               !== undefined && { nombre }),
+          ...(precio_actual        !== undefined && { precio_actual }),
+          ...(codigo_barras        !== undefined && { codigo_barras }),
+          ...(costo                !== undefined && { costo }),
+          ...(marca                !== undefined && { marca }),
+          ...(categoria            !== undefined && { categoria }),
+          ...(proveedor            !== undefined && { proveedor }),
+          ...(stock_minimo         !== undefined && { stock_minimo }),
+          ...(margen               !== undefined && { margen }),
+          ...(precio_sin_redondear !== undefined && { precio_sin_redondear }),
           synced_at: null,
         },
       });

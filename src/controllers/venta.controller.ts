@@ -182,21 +182,60 @@ export async function cobrarVenta(
   }
 }
 
+interface GetVentasQuery {
+  page?:            string;
+  limit?:           string;
+  id?:              string;
+  estado?:          string;
+  fecha?:           string;
+  vendedor_nombre?: string;
+  sesion_id?:       string;
+}
+
+// Misma constante que el dashboard: Argentina es UTC-3 sin DST.
+const ARGENTINA_OFFSET_MS = 3 * 60 * 60 * 1000;
+
+function buildRangoDiaVentas(fecha: string): { gte: Date; lte: Date } {
+  const inicio = new Date(`${fecha}T03:00:00.000Z`);
+  const fin    = new Date(inicio.getTime() + 24 * 60 * 60 * 1000 - 1);
+  return { gte: inicio, lte: fin };
+}
+
+function todayArgentina(): string {
+  const arDate = new Date(Date.now() - ARGENTINA_OFFSET_MS);
+  return arDate.toISOString().slice(0, 10);
+}
+
 export async function getVentas(
-  request: FastifyRequest,
+  request: FastifyRequest<{ Querystring: GetVentasQuery }>,
   reply: FastifyReply
 ) {
   try {
-    const { estado, fecha, vendedor_nombre, sesion_id } = request.query as {
-      estado?:          string;
-      fecha?:           string;
-      vendedor_nombre?: string;
-      sesion_id?:       string;
-    };
+    const { id, estado, fecha, vendedor_nombre, sesion_id } = request.query;
+
+    const page  = Math.max(1, parseInt(request.query.page  ?? '1',  10));
+    const limit = Math.max(1, parseInt(request.query.limit ?? '30', 10));
+    const skip  = (page - 1) * limit;
+
+    // Si viene un id exacto, devolvemos solo ese ticket (sin paginación necesaria).
+    if (id) {
+      const venta = await prisma.venta.findUnique({
+        where: { id },
+        include: {
+          detalles: { include: { producto: true } },
+          pagos:    true,
+          sesion:   { include: { caja: true } },
+        },
+      });
+      if (!venta) return reply.status(404).send({ error: 'Venta no encontrada' });
+      return reply.send({ data: [venta], meta: { total: 1, page: 1, limit: 1, totalPages: 1 } });
+    }
+
+    // Filtro de fecha: si no se especifica, se usa el día de hoy en Argentina.
+    const fechaFiltro = fecha ?? todayArgentina();
 
     const where: Prisma.VentaWhereInput = {
-      // Si viene sesion_id sin estado explícito, devolvemos PAGADA y ANULADA
-      // (las PENDIENTE no tienen sesion_id asignado todavía)
+      created_at: buildRangoDiaVentas(fechaFiltro),
       estado: estado
         ? estado
         : sesion_id
@@ -204,29 +243,27 @@ export async function getVentas(
           : undefined,
       ...(vendedor_nombre && { vendedor_nombre: { contains: vendedor_nombre } }),
       ...(sesion_id       && { sesion_id }),
-      ...(fecha           && {
-        created_at: {
-          gte: new Date(`${fecha}T00:00:00`),
-          lte: new Date(`${fecha}T23:59:59.999`),
-        },
-      }),
     };
 
-    const ventas = await prisma.venta.findMany({
-      where,
-      orderBy: { created_at: 'desc' },
-      include: {
-        detalles: {
-          include: { producto: true },
+    const [total, data] = await prisma.$transaction([
+      prisma.venta.count({ where }),
+      prisma.venta.findMany({
+        where,
+        orderBy: { created_at: 'desc' },
+        skip,
+        take: limit,
+        include: {
+          detalles: { include: { producto: true } },
+          pagos:    true,
+          sesion:   { include: { caja: true } },
         },
-        pagos: true,
-        sesion: {
-          include: { caja: true },
-        },
-      },
-    });
+      }),
+    ]);
 
-    return reply.send(ventas);
+    return reply.send({
+      data,
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    });
   } catch (error) {
     request.log.error(error);
     return reply.status(500).send({ error: 'Error al obtener las ventas' });

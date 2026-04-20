@@ -9,7 +9,7 @@ export async function syncProductosToCloud(): Promise<void> {
     // Raw SQL: synced_at IS NULL o updated_at > synced_at (Prisma no soporta comparación entre campos en where)
     productos = await prisma.$queryRaw<Producto[]>`
       SELECT * FROM "Producto"
-      WHERE synced_at IS NULL OR updated_at > synced_at      LIMIT 500    `;
+      WHERE synced_at IS NULL OR updated_at > synced_at      LIMIT 100    `;
   } catch (err) {
     console.error('[SYNC] ❌ ERROR CRÍTICO al leer productos pendientes desde la BD local:', err instanceof Error ? err.message : err);
     return;
@@ -67,7 +67,7 @@ export async function syncStockTiendaToCloud(): Promise<void> {
       SELECT id, producto_id, tienda_id, cantidad, updated_at
       FROM "StockTienda"
       WHERE synced_at IS NULL OR updated_at > synced_at
-      LIMIT 500
+      LIMIT 100
     `;
   } catch (err) {
     console.error('[SYNC] ❌ ERROR CRÍTICO al leer stocks pendientes desde la BD local:', err instanceof Error ? err.message : err);
@@ -405,7 +405,7 @@ async function pullProductosFromCloud(): Promise<void> {
     .select('id, codigo_barras, nombre, precio_actual, activo, eliminado, updated_at')
     .gt('updated_at', cursor)
     .order('updated_at', { ascending: true })
-    .limit(500);
+    .limit(100);
 
   if (error) throw new Error(`Pull Productos: ${error.message}`);
 

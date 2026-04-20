@@ -36,11 +36,13 @@ model Producto {
   marca           String?
   categoria       String?
   proveedor       String?
-  activo          Boolean       @default(true)
-  eliminado       Boolean       @default(false)
-  stock_minimo    Int           @default(5)
-  updated_at      DateTime      @updatedAt @default(now())
-  synced_at       DateTime?
+  activo               Boolean       @default(true)
+  eliminado            Boolean       @default(false)
+  stock_minimo         Int           @default(5)
+  margen               Float?        @default(1)
+  precio_sin_redondear Float?
+  updated_at           DateTime      @updatedAt @default(now())
+  synced_at            DateTime?
 
   detalles_ventas DetalleVenta[]
   stocks          StockTienda[]
