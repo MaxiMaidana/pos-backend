@@ -205,7 +205,7 @@ interface UpdateBorradorBody {
   vendedor_nombre?: string;
   cliente_nombre?:  string;
   descuento_total?: number;
-  detalles: DetalleInput[];
+  detalles?:        DetalleInput[];
 }
 
 export async function updateBorrador(
@@ -226,34 +226,36 @@ export async function updateBorrador(
       });
     }
 
-    const subtotalBruto = detalles.reduce(
-      (sum, d) => sum + d.cantidad * d.precio_unitario_historico,
-      0
-    );
+    // detalles es opcional: si no viene, solo se actualizan los campos escalares.
+    const actualizaDetalles = detalles !== undefined;
     const nuevoDescuento = descuento_total ?? venta.descuento_total;
-    const total = subtotalBruto - nuevoDescuento;
+    const nuevoTotal = actualizaDetalles
+      ? detalles!.reduce((sum, d) => sum + d.cantidad * d.precio_unitario_historico, 0) - nuevoDescuento
+      : undefined;
 
     const ventaActualizada = await prisma.$transaction(async (tx) => {
-      // Reemplaza todos los detalles (delete + re-insert).
-      await tx.detalleVenta.deleteMany({ where: { venta_id: id } });
-      await tx.detalleVenta.createMany({
-        data: detalles.map((d) => ({
-          venta_id:                 id,
-          producto_id:              d.producto_id,
-          cantidad:                 d.cantidad,
-          precio_unitario_historico: d.precio_unitario_historico,
-          subtotal:                 d.cantidad * d.precio_unitario_historico,
-        })),
-      });
+      if (actualizaDetalles) {
+        // Reemplaza todos los detalles (delete + re-insert).
+        await tx.detalleVenta.deleteMany({ where: { venta_id: id } });
+        await tx.detalleVenta.createMany({
+          data: detalles!.map((d) => ({
+            venta_id:                  id,
+            producto_id:               d.producto_id,
+            cantidad:                  d.cantidad,
+            precio_unitario_historico: d.precio_unitario_historico,
+            subtotal:                  d.cantidad * d.precio_unitario_historico,
+          })),
+        });
+      }
 
       await tx.venta.update({
         where: { id },
         data: {
-          total,
-          descuento_total: nuevoDescuento,
           synced_at: null,
-          ...(vendedor_nombre !== undefined && { vendedor_nombre }),
-          ...(cliente_nombre  !== undefined && { cliente_nombre }),
+          ...(nuevoTotal       !== undefined && { total: nuevoTotal }),
+          ...(actualizaDetalles               && { descuento_total: nuevoDescuento }),
+          ...(vendedor_nombre  !== undefined  && { vendedor_nombre }),
+          ...(cliente_nombre   !== undefined  && { cliente_nombre }),
         },
       });
 
