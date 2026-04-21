@@ -40,6 +40,8 @@ const start = async () => {
     await fastify.register(helmet, {
       crossOriginResourcePolicy: false,
       crossOriginOpenerPolicy:   false,
+      contentSecurityPolicy: false, // <-- APAGA ESTO EN RED LOCAL
+      hsts: false                   // <-- Y ESTO TAMBIÉN
     });
 
     // Asegura que los errores (401, 403, 500) también devuelvan headers CORS.
