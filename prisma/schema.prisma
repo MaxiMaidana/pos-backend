@@ -14,9 +14,22 @@ model Tienda {
   creado_en  DateTime     @default(now())
   updated_at DateTime     @updatedAt
 
-  stocks   StockTienda[]
-  ventas   Venta[]
-  sesiones SesionCaja[]
+  stocks     StockTienda[]
+  ventas     Venta[]
+  sesiones   SesionCaja[]
+  vendedores Vendedor[]
+}
+
+model Vendedor {
+  id         String   @id @default(uuid())
+  nombre     String
+  activo     Boolean  @default(true)
+  tienda_id  String
+  updated_at DateTime @updatedAt @default(now())
+  synced_at  DateTime?
+
+  tienda Tienda @relation(fields: [tienda_id], references: [id])
+  ventas Venta[]
 }
 
 model Producto {
@@ -56,11 +69,11 @@ model StockTienda {
 
 model Venta {
   id              String  @id @default(uuid())
-  estado          String  @default("PENDIENTE") // PENDIENTE, PAGADA, CANCELADA, ANULADA
+  estado          String  @default("PENDIENTE") // BORRADOR, PENDIENTE, PAGADA, CANCELADA, ANULADA
   total           Float
   descuento_total Float   @default(0)
 
-  vendedor_nombre String
+  vendedorId String?
 
   created_at DateTime  @default(now())
   updated_at DateTime  @updatedAt
@@ -76,6 +89,8 @@ model Venta {
 
   detalles DetalleVenta[]
   pagos    Pago[]
+
+  vendedor  Vendedor? @relation(fields: [vendedorId], references: [id])
 
   sesion_id String?
   sesion    SesionCaja? @relation(fields: [sesion_id], references: [id])

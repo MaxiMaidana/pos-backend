@@ -2,6 +2,63 @@ import { prisma } from '../db/prisma.js';
 import { supabase } from '../db/supabase.js';
 import type { Producto, SesionCaja } from '@prisma/client';
 
+// ── PUSH: Vendedores (local → nube) ──────────────────────────────────────────
+
+type VendedorRow = { id: string; nombre: string; activo: number; tienda_id: string; updated_at: Date };
+
+export async function syncVendedoresToCloud(): Promise<void> {
+  let vendedores: VendedorRow[] = [];
+
+  try {
+    vendedores = await prisma.$queryRaw<VendedorRow[]>`
+      SELECT id, nombre, activo, tienda_id, updated_at
+      FROM "Vendedor"
+      WHERE synced_at IS NULL OR updated_at > synced_at
+      LIMIT 100
+    `;
+  } catch (err) {
+    console.error('[SYNC] ❌ ERROR CRÍTICO al leer vendedores pendientes desde la BD local:', err instanceof Error ? err.message : err);
+    return;
+  }
+
+  if (vendedores.length === 0) {
+    console.info('[SYNC] 💤 Vendedores: nada nuevo para sincronizar en este ciclo.');
+    return;
+  }
+
+  console.info(`[SYNC] 📦 Se encontraron ${vendedores.length} vendedor(es) pendientes de subir.`);
+
+  let exitosos = 0;
+
+  for (const v of vendedores) {
+    try {
+      const { error } = await supabase.from('Vendedor').upsert({
+        id:         v.id,
+        nombre:     v.nombre,
+        activo:     Boolean(v.activo),
+        tienda_id:  v.tienda_id,
+        updated_at: v.updated_at,
+      });
+      if (error) throw new Error(error.message);
+
+      await prisma.$executeRaw`
+        UPDATE "Vendedor" SET synced_at = updated_at WHERE id = ${v.id}
+      `;
+
+      exitosos++;
+    } catch (err) {
+      console.error(`[SYNC] ❌ ERROR al sincronizar vendedor "${v.nombre}" (${v.id}): ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  if (exitosos > 0) {
+    console.info(`[SYNC] ✅ ${exitosos} vendedor(es) sincronizados exitosamente.`);
+  }
+  if (exitosos < vendedores.length) {
+    console.warn(`[SYNC] ⚠️  ${vendedores.length - exitosos} vendedor(es) fallaron y se reintentarán en el próximo ciclo.`);
+  }
+}
+
 export async function syncProductosToCloud(): Promise<void> {
   let productos: Producto[] = [];
 
@@ -171,13 +228,28 @@ export async function syncVentasToCloud(): Promise<void> {
         if (eProducto) throw new Error(`Producto upsert (${detalle.producto.id}): ${eProducto.message}`);
       }
 
+      // Paso B2: Vendedor referenciado en la venta (FK requerida en Supabase)
+      if (venta.vendedorId) {
+        const vendedorLocal = await prisma.vendedor.findUnique({ where: { id: venta.vendedorId } });
+        if (vendedorLocal) {
+          const { error: eVendedor } = await supabase.from('Vendedor').upsert({
+            id:         vendedorLocal.id,
+            nombre:     vendedorLocal.nombre,
+            activo:     vendedorLocal.activo,
+            tienda_id:  vendedorLocal.tienda_id,
+            updated_at: vendedorLocal.updated_at,
+          });
+          if (eVendedor) throw new Error(`Vendedor upsert (${vendedorLocal.id}): ${eVendedor.message}`);
+        }
+      }
+
       // Paso C: Venta, detalles y pagos
       const { error: eVenta } = await supabase.from('Venta').upsert({
         id:              venta.id,
         estado:          venta.estado,
         total:           venta.total,
         descuento_total: venta.descuento_total,
-        vendedor_nombre: venta.vendedor_nombre || 'Vendedor Desconocido',
+        vendedorId:      venta.vendedorId,
         created_at:      venta.created_at,
         updated_at:      venta.updated_at,
         sesion_id:       venta.sesion_id,
@@ -522,8 +594,52 @@ async function pullStockTiendaFromCloud(): Promise<void> {
 }
 
 /**
+ * Descarga TODOS los vendedores de la nube y los cachea en SQLite.
+ * Full sync (como Tiendas): los vendedores son pocos y deben estar
+ * completos localmente para que las FKs de Venta funcionen offline.
+ */
+async function pullVendedoresFromCloud(): Promise<void> {
+  const { data, error } = await supabase
+    .from('Vendedor')
+    .select('id, nombre, activo, tienda_id, updated_at')
+    .order('updated_at', { ascending: true });
+
+  if (error) throw new Error(`Pull Vendedores: ${error.message}`);
+
+  if (!data || data.length === 0) {
+    console.info('[SYNC] 💤 Pull Vendedores: sin novedades desde la nube.');
+    return;
+  }
+
+  console.info(`[SYNC] ⬇️  ${data.length} vendedor(es) descargando desde la nube.`);
+
+  let exitosos = 0;
+  for (const v of data) {
+    try {
+      const updatedAt = new Date(v.updated_at);
+      await prisma.$executeRaw`
+        INSERT INTO "Vendedor" (id, nombre, activo, tienda_id, updated_at, synced_at)
+        VALUES (${v.id}, ${v.nombre}, ${v.activo}, ${v.tienda_id}, ${updatedAt}, ${updatedAt})
+        ON CONFLICT(id) DO UPDATE SET
+          nombre     = excluded.nombre,
+          activo     = excluded.activo,
+          tienda_id  = excluded.tienda_id,
+          updated_at = excluded.updated_at,
+          synced_at  = excluded.updated_at
+        WHERE excluded.updated_at >= "Vendedor".updated_at
+      `;
+      exitosos++;
+    } catch (err) {
+      console.error(`[SYNC] ❌ Error al insertar Vendedor (${v.id}):`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  console.info(`[SYNC] ✅ ${exitosos}/${data.length} vendedor(es) guardados en SQLite local.`);
+}
+
+/**
  * Fase de Pull del ciclo de sincronización.
- * Orden: Tiendas → Productos → StockTienda (respeta dependencias FK).
+ * Orden: Tiendas → Productos → Vendedores → StockTienda (respeta dependencias FK).
  * Los errores se loguean pero NO abortan el ciclo de Push posterior.
  */
 export async function pullFromCloud(): Promise<void> {
@@ -539,6 +655,9 @@ export async function pullFromCloud(): Promise<void> {
 
     // ── Paso 2: Productos (cursor independiente lastProductPullAt) ────────────
     await pullProductosFromCloud();
+
+    // ── Paso 2.5: Vendedores (full sync, pocas filas) ─────────────────────────
+    await pullVendedoresFromCloud();
 
     // ── Paso 3: StockTienda (cursor independiente lastStockPullAt) ────────────
     // Cursores separados: el timestamp del último producto nunca puede

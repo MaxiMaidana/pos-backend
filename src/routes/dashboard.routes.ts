@@ -173,18 +173,18 @@ async function getAnaliticas(
 
       // 1. Volumen total: TODAS las ventas del vendedor ese día (todos los estados)
       prisma.venta.groupBy({
-        by: ['vendedor_nombre'],
+        by: ['vendedorId'],
         where: {
           created_at: rango,
           ...(filtrotiendaId && { tienda_id: filtrotiendaId }),
         },
         _count: { _all: true },
-        orderBy: { _count: { vendedor_nombre: 'desc' } },
+        orderBy: { _count: { vendedorId: 'desc' } },
       }),
 
       // 2. Solo PAGADAS: para calcular recaudacionTotal
       prisma.venta.groupBy({
-        by: ['vendedor_nombre'],
+        by: ['vendedorId'],
         where: {
           created_at: rango,
           estado: 'PAGADA',
@@ -196,14 +196,14 @@ async function getAnaliticas(
 
       // 3. Anulaciones agrupadas por vendedor
       prisma.venta.groupBy({
-        by: ['vendedor_nombre'],
+        by: ['vendedorId'],
         where: {
           created_at: rango,
           estado: 'ANULADA',
           ...(filtrotiendaId && { tienda_id: filtrotiendaId }),
         },
         _count: { _all: true },
-        orderBy: { _count: { vendedor_nombre: 'desc' } },
+        orderBy: { _count: { vendedorId: 'desc' } },
       }),
 
       // 4. Sesiones de caja del día — incluye PAGADAS y ANULADAS con sus pagos y movimientos
@@ -224,21 +224,34 @@ async function getAnaliticas(
     ]);
 
     // ── Merge: un objeto por vendedor combinando las 3 fuentes ────────────────
+    // Recolectar todos los vendedorId únicos para hacer un solo query
+    const allVendedorIds = new Set<string>();
+    for (const v of todasVentas) if (v.vendedorId) allVendedorIds.add(v.vendedorId);
+    for (const v of ventasCobradas) if (v.vendedorId) allVendedorIds.add(v.vendedorId);
+    for (const v of ventasAnuladas) if (v.vendedorId) allVendedorIds.add(v.vendedorId);
+
+    const vendedoresDb = await prisma.vendedor.findMany({
+      where: { id: { in: [...allVendedorIds] } },
+      select: { id: true, nombre: true },
+    });
+    const mapaNombres = new Map(vendedoresDb.map((v) => [v.id, v.nombre]));
+
     const mapaRecaudacion = new Map(
-      ventasCobradas.map((v) => [v.vendedor_nombre, v._sum?.total ?? 0])
+      ventasCobradas.map((v) => [v.vendedorId, v._sum?.total ?? 0])
     );
     const mapaAnulaciones = new Map(
       ventasAnuladas.map((v) => [
-        v.vendedor_nombre,
+        v.vendedorId,
         (v._count as { _all: number })._all ?? 0,
       ])
     );
 
     const rendimientoVendedores = todasVentas.map((v) => ({
-      vendedor:         v.vendedor_nombre,
+      vendedorId:       v.vendedorId,
+      vendedor:         mapaNombres.get(v.vendedorId ?? '') ?? 'Sin vendedor',
       cantidadVentas:   (v._count as { _all: number })._all ?? 0,
-      recaudacionTotal: mapaRecaudacion.get(v.vendedor_nombre) ?? 0,
-      cantidadAnuladas: mapaAnulaciones.get(v.vendedor_nombre) ?? 0,
+      recaudacionTotal: mapaRecaudacion.get(v.vendedorId) ?? 0,
+      cantidadAnuladas: mapaAnulaciones.get(v.vendedorId) ?? 0,
     }));
 
     // Ordenar por recaudacionTotal descendente

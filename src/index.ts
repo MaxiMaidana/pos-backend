@@ -11,7 +11,8 @@ import { cajaRoutes } from './routes/caja.routes.js';
 import { dashboardRoutes } from './routes/dashboard.routes.js';
 import { syncRoutes } from './routes/sync.routes.js';
 import { tiendaRoutes } from './routes/tienda.routes.js';
-import { syncVentasToCloud, syncProductosToCloud, syncCajasToCloud, syncSesionesCajaToCloud, syncStockTiendaToCloud, pullFromCloud } from './services/sync.service.js';
+import { vendedorRoutes } from './routes/vendedor.routes.js';
+import { syncVentasToCloud, syncProductosToCloud, syncCajasToCloud, syncSesionesCajaToCloud, syncStockTiendaToCloud, syncVendedoresToCloud, pullFromCloud } from './services/sync.service.js';
 import { authHook } from './plugins/auth.plugin.js';
 import { authRoutes } from './routes/auth.routes.js';
 
@@ -67,6 +68,7 @@ const start = async () => {
       await apiScope.register(dashboardRoutes, { prefix: '/api' });
       await apiScope.register(syncRoutes,      { prefix: '/api' });
       await apiScope.register(tiendaRoutes,    { prefix: '/api' });
+      await apiScope.register(vendedorRoutes,  { prefix: '/api' });
     });
 
     // ── Archivos estáticos del frontend (dist/) ─────────────────────────────
@@ -95,6 +97,7 @@ const start = async () => {
       // ── Push (local → nube) ─────────────────────────────────────────────────
       await syncCajasToCloud();          // Cajas primero (dep. de SesionCaja y Venta)
       await syncSesionesCajaToCloud();   // Sesiones (dep. de Venta)
+      await syncVendedoresToCloud();     // Vendedores (dep. de Venta)
       await syncProductosToCloud();      // Productos (dep. de StockTienda y DetalleVenta)
       await syncStockTiendaToCloud();    // Stock por tienda
       await syncVentasToCloud();
