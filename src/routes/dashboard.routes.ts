@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../db/prisma.js';
+import { parseRecargosCredito } from './config.routes.js';
 
 // ── Helper compartido ─────────────────────────────────────────────────────────
 // Argentina es UTC-3 sin DST. Para filtrar correctamente en Vercel (UTC):
@@ -144,12 +145,46 @@ async function getDashboardStats(
       desglosePagosGlobal[row.metodo] = row._sum?.monto ?? 0;
     }
 
+    // ── Recaudación neta: descontar recargos de tarjeta crédito ──────────────
+    const recaudacionBruta = recaudacion._sum?.total ?? 0;
+    let totalRecargos = 0;
+
+    if (desglosePagosGlobal['TARJETA_CREDITO']) {
+      const config = await prisma.configuracionTienda.findUnique({
+        where: { id: 1 },
+        select: { recargos_credito: true },
+      });
+      const recargosPorCuotas = parseRecargosCredito(config?.recargos_credito);
+
+      // Obtener pagos individuales de tarjeta crédito para aplicar ingeniería inversa
+      const pagosCredito = await prisma.pago.findMany({
+        where: {
+          metodo: 'TARJETA_CREDITO',
+          venta: {
+            created_at: rango,
+            estado: 'PAGADA',
+            ...(filtrotiendaId && { tienda_id: filtrotiendaId }),
+          },
+        },
+        select: { monto: true, cuotas: true },
+      });
+
+      for (const pago of pagosCredito) {
+        const cuotas = pago.cuotas ?? 1;
+        const recargoDecimal = recargosPorCuotas[cuotas] ?? 0;
+        const montoBase = pago.monto / (1 + recargoDecimal);
+        totalRecargos += pago.monto - montoBase;
+      }
+    }
+
     return reply.send({
       fecha:               fecha ?? new Date().toISOString().slice(0, 10),
       tienda_id:           filtrotiendaId ?? null,
       ventasTotales,
       ventasCanceladas,
-      recaudacionTotal:    recaudacion._sum?.total ?? 0,
+      recaudacionTotal:    recaudacionBruta,
+      recaudacionNeta:     recaudacionBruta - totalRecargos,
+      totalRecargos,
       productosStockBajo,
       desglosePagosGlobal,
     });

@@ -270,26 +270,34 @@ export async function confirmarBorrador(
   }
 }
 
-// Recargos por cuotas con tarjeta de crédito
-const RECARGOS_POR_CUOTAS: Record<number, number> = {
-  1: 0.05,   //  5 %
-  2: 0.07,   //  7 %
-  3: 0.10,   // 10 %
-  6: 0.15,   // 15 %
-};
+// Recargos por cuotas con tarjeta de crédito — ahora dinámicos desde ConfiguracionTienda
+import { parseRecargosCredito } from '../routes/config.routes.js';
 
-function calcularTotalConRecargos(
+async function getRecargosPorCuotas(): Promise<Record<number, number>> {
+  const config = await prisma.configuracionTienda.findUnique({
+    where: { id: 1 },
+    select: { recargos_credito: true },
+  });
+  return parseRecargosCredito(config?.recargos_credito);
+}
+
+async function calcularTotalConRecargos(
   totalBase: number,
   pagos: PagoInput[]
-): number {
+): Promise<number> {
   let recargosAcumulados = 0;
+
+  const tieneCredito = pagos.some((p) => p.metodo === 'TARJETA_CREDITO');
+  if (!tieneCredito) return totalBase;
+
+  const recargosPorCuotas = await getRecargosPorCuotas();
 
   for (const pago of pagos) {
     const esTarjetaCredito = pago.metodo === 'TARJETA_CREDITO';
     if (!esTarjetaCredito) continue;
 
     const cuotas          = pago.cuotas ?? 1;
-    const recargoDecimal  = RECARGOS_POR_CUOTAS[cuotas] ?? 0;
+    const recargoDecimal  = recargosPorCuotas[cuotas] ?? 0;
 
     // Ingeniería inversa: el frontend ya envía monto CON recargo incluido.
     // Extraemos el monto base para obtener el recargo real sin duplicarlo.
@@ -327,7 +335,7 @@ export async function cobrarVenta(
     }
 
     const totalPagado        = pagos.reduce((sum, p) => sum + p.monto, 0);
-    const totalConRecargos   = calcularTotalConRecargos(venta.total, pagos);
+    const totalConRecargos   = await calcularTotalConRecargos(venta.total, pagos);
     const hayRecargo         = Math.abs(totalConRecargos - venta.total) > 0.01;
 
     // Validar que lo que manda el frontend coincide con el total esperado

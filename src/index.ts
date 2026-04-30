@@ -12,6 +12,7 @@ import { dashboardRoutes } from './routes/dashboard.routes.js';
 import { syncRoutes } from './routes/sync.routes.js';
 import { tiendaRoutes } from './routes/tienda.routes.js';
 import { vendedorRoutes } from './routes/vendedor.routes.js';
+import { configRoutes } from './routes/config.routes.js';
 import { syncVentasToCloud, syncProductosToCloud, syncCajasToCloud, syncSesionesCajaToCloud, syncStockTiendaToCloud, syncVendedoresToCloud, pullFromCloud } from './services/sync.service.js';
 import { authHook } from './plugins/auth.plugin.js';
 import { authRoutes } from './routes/auth.routes.js';
@@ -69,6 +70,7 @@ const start = async () => {
       await apiScope.register(syncRoutes,      { prefix: '/api' });
       await apiScope.register(tiendaRoutes,    { prefix: '/api' });
       await apiScope.register(vendedorRoutes,  { prefix: '/api' });
+      await apiScope.register(configRoutes,    { prefix: '/api' });
     });
 
     // ── Archivos estáticos del frontend (dist/) ─────────────────────────────

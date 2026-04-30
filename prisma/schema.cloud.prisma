@@ -180,4 +180,5 @@ model ConfiguracionTienda {
   condicionFiscal   String  // MONOTRIBUTO, RESPONSABLE_INSCRIPTO
   puntoVenta        Int
   entornoProduccion Boolean @default(false)
+  recargos_credito  String  @default("{\"1\":0.05,\"2\":0.07,\"3\":0.10,\"6\":0.15}")
 }
