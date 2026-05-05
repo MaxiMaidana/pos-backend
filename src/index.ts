@@ -40,6 +40,7 @@ const start = async () => {
     // Helmet con las políticas de cross-origin desactivadas para que no
     // sobreescriba los headers Access-Control-* en errores y preflights.
     await fastify.register(helmet, {
+      contentSecurityPolicy: false,      // Permite que el frontend cargue recursos desde cualquier origen
       crossOriginResourcePolicy: false,
       crossOriginOpenerPolicy:   false,
     });
