@@ -4,3 +4,8 @@ dist
 .env
 scripts/*
 /dist
+prisma/dev.db
+prisma/dev.db-journal
+prisma/dev.db-shm
+prisma/dev.db-wal
+.claude/
