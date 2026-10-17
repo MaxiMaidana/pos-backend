@@ -118,8 +118,10 @@ export async function obtenerArqueo(
       await calcularResumenSesion(sesionAbierta.id, sesionAbierta.monto_inicial);
 
     return reply.send({
+      sesion_id:                  sesionAbierta.id,
       caja:                       sesionAbierta.caja,
       cajero:                     sesionAbierta.cajero_nombre,
+      cajero_nombre:              sesionAbierta.cajero_nombre,
       fecha_apertura:             sesionAbierta.fecha_apertura,
       monto_inicial:              sesionAbierta.monto_inicial,
       ventas_por_metodo:          resumenPagos,

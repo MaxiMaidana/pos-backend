@@ -25,6 +25,7 @@ interface CreateComandaBody {
 interface CobrarVentaBody {
   caja_id: string;
   pagos: PagoInput[];
+  facturar?: boolean;
 }
 
 interface VentaParams {
@@ -316,7 +317,7 @@ export async function cobrarVenta(
 ) {
   try {
     const { id } = request.params;
-    const { caja_id, pagos } = request.body;
+    const { caja_id, pagos, facturar } = request.body;
 
     const venta = await prisma.venta.findUnique({ where: { id } });
 
@@ -358,9 +359,10 @@ export async function cobrarVenta(
       return tx.venta.update({
         where: { id },
         data: {
-          estado:     'PAGADA',
-          sesion_id:  sesionAbierta.id,
-          synced_at:  null, // Resetear para que el sync la vuelva a detectar como pendiente
+          estado:             'PAGADA',
+          sesion_id:          sesionAbierta.id,
+          synced_at:          null,
+          estadoFacturacion:  facturar ? 'PENDIENTE' : 'NO_APLICA',
           // Actualiza el total solo si hay recargo para mantener trazabilidad
           ...(hayRecargo && { total: totalConRecargos }),
         },
