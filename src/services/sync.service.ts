@@ -437,7 +437,7 @@ function toSupabaseCursor(utcDate: Date): string {
 async function pullTiendasFromCloud(): Promise<number> {
   const { data, error } = await supabase
     .from('Tienda')
-    .select('id, nombre, direccion, creado_en, updated_at')
+    .select('id, nombre, direccion, creado_en, updated_at, facturacion_habilitada')
     .order('updated_at', { ascending: true });
 
   if (error) throw new Error(`Pull Tiendas: ${error.message}`);
@@ -446,20 +446,36 @@ async function pullTiendasFromCloud(): Promise<number> {
     return 0;
   }
 
+  const tiendaLocalId = process.env.TIENDA_LOCAL_ID;
+
   // Transacción única para minimizar round-trips con SQLite
   await prisma.$transaction(
-    data.map((t) =>
-      prisma.$executeRaw`
-        INSERT INTO "Tienda" (id, nombre, direccion, creado_en, updated_at)
-        VALUES (${t.id}, ${t.nombre}, ${t.direccion ?? null}, ${new Date(t.creado_en)}, ${new Date(t.updated_at)})
+    data.map((t) => {
+      const facturacion = t.facturacion_habilitada ?? false;
+      return prisma.$executeRaw`
+        INSERT INTO "Tienda" (id, nombre, direccion, creado_en, updated_at, facturacionHabilitada)
+        VALUES (${t.id}, ${t.nombre}, ${t.direccion ?? null}, ${new Date(t.creado_en)}, ${new Date(t.updated_at)}, ${facturacion})
         ON CONFLICT(id) DO UPDATE SET
-          nombre     = excluded.nombre,
-          direccion  = excluded.direccion,
-          updated_at = excluded.updated_at
+          nombre                = excluded.nombre,
+          direccion             = excluded.direccion,
+          updated_at            = excluded.updated_at,
+          facturacionHabilitada = excluded.facturacionHabilitada
         WHERE excluded.updated_at >= "Tienda".updated_at
-      `
-    )
+      `;
+    })
   );
+
+  // Propagar facturacionHabilitada de la tienda local a ConfiguracionTienda
+  if (tiendaLocalId) {
+    const tiendaLocal = data.find((t) => t.id === tiendaLocalId);
+    if (tiendaLocal) {
+      const habilitada = tiendaLocal.facturacion_habilitada ?? false;
+      await prisma.configuracionTienda.updateMany({
+        where: { id: 1 },
+        data: { facturacionHabilitada: habilitada },
+      }).catch(() => {}); // ConfiguracionTienda puede no existir en setups nuevos
+    }
+  }
 
   return data.length;
 }

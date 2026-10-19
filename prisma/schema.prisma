@@ -8,11 +8,12 @@ datasource db {
 }
 
 model Tienda {
-  id         String       @id @default(uuid())
-  nombre     String
-  direccion  String?
-  creado_en  DateTime     @default(now())
-  updated_at DateTime     @updatedAt
+  id                    String       @id @default(uuid())
+  nombre                String
+  direccion             String?
+  creado_en             DateTime     @default(now())
+  updated_at            DateTime     @updatedAt
+  facturacionHabilitada Boolean      @default(false)
 
   stocks     StockTienda[]
   ventas     Venta[]
