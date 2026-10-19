@@ -101,7 +101,53 @@ async function updateRecargos(
   }
 }
 
+// ── PUT /api/config ──────────────────────────────────────────────────────────
+interface UpdateConfigBody {
+  cuit?: string;
+  razonSocial?: string;
+  condicionFiscal?: 'MONOTRIBUTO' | 'RESPONSABLE_INSCRIPTO';
+  puntoVenta?: number;
+  entornoProduccion?: boolean;
+}
+
+async function updateConfig(
+  request: FastifyRequest<{ Body: UpdateConfigBody }>,
+  reply: FastifyReply,
+) {
+  try {
+    const { cuit, razonSocial, condicionFiscal, puntoVenta, entornoProduccion } = request.body;
+
+    const config = await prisma.configuracionTienda.upsert({
+      where: { id: 1 },
+      update: {
+        ...(cuit              !== undefined && { cuit }),
+        ...(razonSocial       !== undefined && { razonSocial }),
+        ...(condicionFiscal   !== undefined && { condicionFiscal }),
+        ...(puntoVenta        !== undefined && { puntoVenta }),
+        ...(entornoProduccion !== undefined && { entornoProduccion }),
+      },
+      create: {
+        id:                1,
+        cuit:              cuit              ?? '00000000000',
+        razonSocial:       razonSocial       ?? 'Sin configurar',
+        condicionFiscal:   condicionFiscal   ?? 'MONOTRIBUTO',
+        puntoVenta:        puntoVenta        ?? 1,
+        entornoProduccion: entornoProduccion ?? false,
+      },
+    });
+
+    return reply.send({
+      ...config,
+      recargos_credito: parseRecargosCredito(config.recargos_credito),
+    });
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({ error: 'Error al actualizar la configuración' });
+  }
+}
+
 export async function configRoutes(fastify: FastifyInstance) {
   fastify.get('/config', getConfig);
+  fastify.put('/config', updateConfig);
   fastify.put('/config/recargos', updateRecargos);
 }

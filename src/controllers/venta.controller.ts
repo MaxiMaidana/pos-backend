@@ -26,6 +26,8 @@ interface CobrarVentaBody {
   caja_id: string;
   pagos: PagoInput[];
   facturar?: boolean;
+  tipoFactura?: 'A' | 'B' | 'C';
+  compradorCuit?: string;
 }
 
 interface VentaParams {
@@ -273,6 +275,7 @@ export async function confirmarBorrador(
 
 // Recargos por cuotas con tarjeta de crédito — ahora dinámicos desde ConfiguracionTienda
 import { parseRecargosCredito } from '../routes/config.routes.js';
+import { emitirFactura } from '../services/afip.service.js';
 
 async function getRecargosPorCuotas(): Promise<Record<number, number>> {
   const config = await prisma.configuracionTienda.findUnique({
@@ -317,7 +320,7 @@ export async function cobrarVenta(
 ) {
   try {
     const { id } = request.params;
-    const { caja_id, pagos, facturar } = request.body;
+    const { caja_id, pagos, facturar, tipoFactura, compradorCuit } = request.body;
 
     const venta = await prisma.venta.findUnique({ where: { id } });
 
@@ -369,6 +372,33 @@ export async function cobrarVenta(
         include: { detalles: true, pagos: true },
       });
     });
+
+    // Facturación ARCA: fire-and-forget; el cobro ya está confirmado
+    if (facturar && tipoFactura) {
+      const config = await prisma.configuracionTienda.findUnique({ where: { id: 1 } });
+      if (config) {
+        emitirFactura(config, ventaCobrada.total, tipoFactura, compradorCuit)
+          .then((resultado) =>
+            prisma.venta.update({
+              where: { id },
+              data: {
+                estadoFacturacion: 'EMITIDA',
+                cae:               resultado.cae,
+                vencimientoCae:    resultado.vencimientoCae,
+                numeroFactura:     resultado.numeroFactura,
+                tipoFactura:       resultado.tipoFactura,
+              },
+            })
+          )
+          .catch((err) => {
+            request.log.error({ err }, 'Error ARCA al emitir factura para venta ' + id);
+            prisma.venta.update({
+              where: { id },
+              data: { estadoFacturacion: 'ERROR', errorFacturacion: String(err?.message ?? err) },
+            }).catch(() => {});
+          });
+      }
+    }
 
     return reply.send(ventaCobrada);
   } catch (error) {
