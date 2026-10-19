@@ -407,6 +407,65 @@ export async function cobrarVenta(
   }
 }
 
+interface FacturarVentaBody {
+  tipoFactura: 'A' | 'B' | 'C';
+  compradorCuit?: string;
+}
+
+export async function facturarVenta(
+  request: FastifyRequest<{ Params: VentaParams; Body: FacturarVentaBody }>,
+  reply: FastifyReply
+) {
+  try {
+    const { id } = request.params;
+    const { tipoFactura, compradorCuit } = request.body;
+
+    const venta = await prisma.venta.findUnique({ where: { id } });
+    if (!venta) return reply.status(404).send({ error: 'Venta no encontrada' });
+    if (venta.estado !== 'PAGADA') {
+      return reply.status(400).send({ error: 'Solo se pueden facturar ventas pagadas' });
+    }
+    if (venta.estadoFacturacion === 'EMITIDA') {
+      return reply.status(400).send({ error: 'Esta venta ya tiene factura emitida' });
+    }
+
+    const config = await prisma.configuracionTienda.findUnique({ where: { id: 1 } });
+    if (!config) return reply.status(500).send({ error: 'Configuración ARCA no encontrada' });
+
+    // Marcar PENDIENTE antes de intentar (permite ver el estado si el proceso muere)
+    await prisma.venta.update({
+      where: { id },
+      data: { estadoFacturacion: 'PENDIENTE', errorFacturacion: null },
+    });
+
+    const resultado = await emitirFactura(config, venta.total, tipoFactura, compradorCuit);
+
+    const ventaFacturada = await prisma.venta.update({
+      where: { id },
+      data: {
+        estadoFacturacion: 'EMITIDA',
+        cae:               resultado.cae,
+        vencimientoCae:    resultado.vencimientoCae,
+        numeroFactura:     resultado.numeroFactura,
+        tipoFactura:       resultado.tipoFactura,
+        errorFacturacion:  null,
+      },
+    });
+
+    return reply.send(ventaFacturada);
+  } catch (error: any) {
+    request.log.error({ error }, 'Error al facturar venta ' + request.params.id);
+    await prisma.venta.update({
+      where: { id: request.params.id },
+      data: {
+        estadoFacturacion: 'ERROR',
+        errorFacturacion: String(error?.message ?? error),
+      },
+    }).catch(() => {});
+    return reply.status(500).send({ error: String(error?.message ?? 'Error al facturar con ARCA') });
+  }
+}
+
 interface GetVentasQuery {
   page?:       string;
   limit?:      string;
