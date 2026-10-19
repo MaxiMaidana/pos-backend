@@ -108,6 +108,7 @@ interface UpdateConfigBody {
   condicionFiscal?: 'MONOTRIBUTO' | 'RESPONSABLE_INSCRIPTO';
   puntoVenta?: number;
   entornoProduccion?: boolean;
+  facturacionHabilitada?: boolean;
 }
 
 async function updateConfig(
@@ -115,24 +116,26 @@ async function updateConfig(
   reply: FastifyReply,
 ) {
   try {
-    const { cuit, razonSocial, condicionFiscal, puntoVenta, entornoProduccion } = request.body;
+    const { cuit, razonSocial, condicionFiscal, puntoVenta, entornoProduccion, facturacionHabilitada } = request.body;
 
     const config = await prisma.configuracionTienda.upsert({
       where: { id: 1 },
       update: {
-        ...(cuit              !== undefined && { cuit }),
-        ...(razonSocial       !== undefined && { razonSocial }),
-        ...(condicionFiscal   !== undefined && { condicionFiscal }),
-        ...(puntoVenta        !== undefined && { puntoVenta }),
-        ...(entornoProduccion !== undefined && { entornoProduccion }),
+        ...(cuit                    !== undefined && { cuit }),
+        ...(razonSocial             !== undefined && { razonSocial }),
+        ...(condicionFiscal         !== undefined && { condicionFiscal }),
+        ...(puntoVenta              !== undefined && { puntoVenta }),
+        ...(entornoProduccion       !== undefined && { entornoProduccion }),
+        ...(facturacionHabilitada   !== undefined && { facturacionHabilitada }),
       },
       create: {
-        id:                1,
-        cuit:              cuit              ?? '00000000000',
-        razonSocial:       razonSocial       ?? 'Sin configurar',
-        condicionFiscal:   condicionFiscal   ?? 'MONOTRIBUTO',
-        puntoVenta:        puntoVenta        ?? 1,
-        entornoProduccion: entornoProduccion ?? false,
+        id:                    1,
+        cuit:                  cuit                  ?? '00000000000',
+        razonSocial:           razonSocial           ?? 'Sin configurar',
+        condicionFiscal:       condicionFiscal       ?? 'MONOTRIBUTO',
+        puntoVenta:            puntoVenta            ?? 1,
+        entornoProduccion:     entornoProduccion     ?? false,
+        facturacionHabilitada: facturacionHabilitada ?? false,
       },
     });
 
