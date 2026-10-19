@@ -74,21 +74,19 @@ const start = async () => {
       await apiScope.register(configRoutes,    { prefix: '/api' });
     });
 
-    // ── Archivos estáticos del frontend (dist/) ─────────────────────────────
-    const __dirname = dirname(fileURLToPath(import.meta.url));
-    const distPath  = join(__dirname, '..', 'dist');
+    // ── Archivos estáticos del frontend (public/) ────────────────────────────
+    const __dirname  = dirname(fileURLToPath(import.meta.url));
+    const publicPath = join(__dirname, '..', 'public');
 
     await fastify.register(staticFiles, {
-      root:       distPath,
-      prefix:     '/',
-      // No lanza error si el archivo no existe; lo manejamos con el wildcard
+      root:          publicPath,
+      prefix:        '/',
       decorateReply: false,
     });
 
     // SPA fallback: cualquier ruta que no sea /api/* devuelve index.html
-    // para que React Router / Vue Router manejen la navegación del lado cliente.
     fastify.setNotFoundHandler(async (_request, reply) => {
-      return reply.sendFile('index.html', distPath);
+      return reply.sendFile('index.html', publicPath);
     });
 
     setInterval(async () => {
