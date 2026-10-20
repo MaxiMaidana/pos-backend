@@ -82,7 +82,8 @@ model Venta {
   total           Float
   descuento_total Float  @default(0)
 
-  vendedorId String?
+  vendedorId     String?
+  cliente_nombre String?
 
   created_at DateTime  @default(now())
   updated_at DateTime  @updatedAt

@@ -230,12 +230,17 @@ export async function updateBorrador(
   }
 }
 
+interface ConfirmarBorradorBody {
+  cliente_nombre?: string;
+}
+
 export async function confirmarBorrador(
-  request: FastifyRequest<{ Params: VentaParams }>,
+  request: FastifyRequest<{ Params: VentaParams; Body: ConfirmarBorradorBody }>,
   reply: FastifyReply
 ) {
   try {
     const { id } = request.params;
+    const { cliente_nombre } = request.body ?? {};
 
     const venta = await prisma.venta.findUnique({
       where: { id },
@@ -263,7 +268,7 @@ export async function confirmarBorrador(
 
       return tx.venta.update({
         where: { id },
-        data: { estado: 'PENDIENTE' },
+        data: { estado: 'PENDIENTE', ...(cliente_nombre ? { cliente_nombre } : {}) },
         include: { detalles: { include: { producto: true } }, vendedor: true },
       });
     });
