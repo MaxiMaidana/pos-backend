@@ -252,6 +252,36 @@ export async function registrarMovimiento(
   }
 }
 
+export async function getSesionActiva(
+  request: FastifyRequest<{ Querystring: { caja_id?: string } }>,
+  reply: FastifyReply
+) {
+  try {
+    const { caja_id } = request.query;
+
+    if (!caja_id) {
+      return reply.status(400).send({ error: 'El parámetro caja_id es requerido' });
+    }
+
+    const sesion = await prisma.sesionCaja.findFirst({
+      where: { caja_id, estado: 'ABIERTA' },
+      select: {
+        id:            true,
+        cajero_nombre: true,
+        caja_id:       true,
+        estado:        true,
+        monto_inicial: true,
+        fecha_apertura: true,
+      },
+    });
+
+    return reply.send({ sesion: sesion ?? null });
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({ error: 'Error al obtener la sesión activa' });
+  }
+}
+
 export async function estadoCaja(
   request: FastifyRequest<{ Params: CajaParams }>,
   reply: FastifyReply

@@ -41,6 +41,8 @@ async function getConfig(_request: FastifyRequest, reply: FastifyReply) {
     return reply.send({
       ...config,
       recargos_credito: parseRecargosCredito(config.recargos_credito),
+      modoCajaSimple: process.env.MODO_CAJA_SIMPLE === 'true',
+      cajaId: process.env.CAJA_ID ?? null,
     });
   } catch (error) {
     _request.log.error(error);
