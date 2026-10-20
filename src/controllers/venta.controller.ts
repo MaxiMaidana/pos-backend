@@ -103,6 +103,7 @@ interface CreateBorradorBody {
   vendedorId: string;
   descuento_total?: number;
   detalles: DetalleInput[];
+  sesion_id?: string | null;
 }
 
 interface UpdateBorradorBody {
@@ -115,7 +116,7 @@ export async function createBorrador(
   reply: FastifyReply
 ) {
   try {
-    const { vendedorId, descuento_total = 0, detalles } = request.body;
+    const { vendedorId, descuento_total = 0, detalles, sesion_id } = request.body;
 
     if (vendedorId) {
       const vendedor = await prisma.vendedor.findUnique({ where: { id: vendedorId } });
@@ -141,6 +142,7 @@ export async function createBorrador(
           total,
           descuento_total,
           tienda_id: TIENDA_LOCAL_ID,
+          ...(sesion_id ? { sesion_id } : {}),
         },
       });
 
