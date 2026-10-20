@@ -374,6 +374,7 @@ export async function cobrarVenta(
           synced_at:          null,
           estadoFacturacion:  facturar ? 'PENDIENTE' : 'NO_APLICA',
           ...(compradorCuit && { cliente_cuit: compradorCuit }),
+          ...(facturar && tipoFactura && { tipoFactura }),
           // Actualiza el total solo si hay recargo para mantener trazabilidad
           ...(hayRecargo && { total: totalConRecargos }),
         },
@@ -471,6 +472,77 @@ export async function facturarVenta(
       },
     }).catch(() => {});
     return reply.status(500).send({ error: String(error?.message ?? 'Error al facturar con ARCA') });
+  }
+}
+
+interface FacturarPendientesBody {
+  fecha?: string;
+}
+
+// Reintenta, una por una, todas las ventas PAGADAs con estadoFacturacion ERROR
+// de un día puntual. Cada venta usa su propio tipoFactura/cliente_cuit guardados
+// al momento del cobro (si no tiene cliente_cuit, se intentó como Consumidor Final).
+// No corre en paralelo para no saturar ARCA con reintentos simultáneos.
+export async function facturarPendientes(
+  request: FastifyRequest<{ Body: FacturarPendientesBody }>,
+  reply: FastifyReply
+) {
+  try {
+    const fechaFiltro = request.body?.fecha ?? todayArgentina();
+
+    const config = await prisma.configuracionTienda.findUnique({ where: { id: 1 } });
+    if (!config) return reply.status(500).send({ error: 'Configuración ARCA no encontrada' });
+
+    const ventas = await prisma.venta.findMany({
+      where: {
+        estado:            'PAGADA',
+        estadoFacturacion: 'ERROR',
+        created_at:        buildRangoDiaVentas(fechaFiltro),
+      },
+    });
+
+    const tipoPorDefecto = config.condicionFiscal === 'MONOTRIBUTO' ? 'C' : 'B';
+    const resultados: Array<{ id: string; ok: boolean; error?: string }> = [];
+
+    for (const venta of ventas) {
+      const tipoFactura = (venta.tipoFactura as 'A' | 'B' | 'C' | null) ?? tipoPorDefecto;
+      try {
+        await prisma.venta.update({
+          where: { id: venta.id },
+          data: { estadoFacturacion: 'PENDIENTE', errorFacturacion: null },
+        });
+        const resultado = await emitirFactura(config, venta.total, tipoFactura, venta.cliente_cuit ?? undefined);
+        await prisma.venta.update({
+          where: { id: venta.id },
+          data: {
+            estadoFacturacion: 'EMITIDA',
+            cae:               resultado.cae,
+            vencimientoCae:    resultado.vencimientoCae,
+            numeroFactura:     resultado.numeroFactura,
+            tipoFactura:       resultado.tipoFactura,
+            errorFacturacion:  null,
+          },
+        });
+        resultados.push({ id: venta.id, ok: true });
+      } catch (error: any) {
+        const mensaje = String(error?.message ?? error);
+        await prisma.venta.update({
+          where: { id: venta.id },
+          data: { estadoFacturacion: 'ERROR', errorFacturacion: mensaje },
+        }).catch(() => {});
+        resultados.push({ id: venta.id, ok: false, error: mensaje });
+      }
+    }
+
+    return reply.send({
+      total:    ventas.length,
+      emitidas: resultados.filter((r) => r.ok).length,
+      fallidas: resultados.filter((r) => !r.ok).length,
+      resultados,
+    });
+  } catch (error) {
+    request.log.error(error);
+    return reply.status(500).send({ error: 'Error al facturar las ventas pendientes' });
   }
 }
 
