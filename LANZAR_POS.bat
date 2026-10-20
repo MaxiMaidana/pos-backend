@@ -43,6 +43,13 @@ if not exist "public\index.html" (
     echo.
 )
 
+REM Liberar el puerto 3000 si ya hay algo corriendo
+for /f "tokens=5" %%P in ('netstat -ano 2^>nul ^| findstr ":3000 " ^| findstr "LISTENING"') do (
+    echo  Puerto 3000 ocupado (PID %%P). Cerrando proceso anterior...
+    taskkill /PID %%P /F > nul 2>&1
+    timeout /t 1 /nobreak > nul
+)
+
 REM Abrir el navegador despues de 3 segundos (en segundo plano)
 start "" cmd /c "timeout /t 3 /nobreak > nul && start http://localhost:3000"
 
