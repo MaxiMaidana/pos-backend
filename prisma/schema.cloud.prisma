@@ -84,6 +84,7 @@ model Venta {
 
   vendedorId     String?
   cliente_nombre String?
+  cliente_cuit   String?
 
   created_at DateTime  @default(now())
   updated_at DateTime  @updatedAt

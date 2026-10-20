@@ -373,6 +373,7 @@ export async function cobrarVenta(
           sesion_id:          sesionAbierta.id,
           synced_at:          null,
           estadoFacturacion:  facturar ? 'PENDIENTE' : 'NO_APLICA',
+          ...(compradorCuit && { cliente_cuit: compradorCuit }),
           // Actualiza el total solo si hay recargo para mantener trazabilidad
           ...(hayRecargo && { total: totalConRecargos }),
         },
