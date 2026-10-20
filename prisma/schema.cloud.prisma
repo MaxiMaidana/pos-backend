@@ -16,11 +16,12 @@ datasource db {
 }
 
 model Tienda {
-  id         String       @id @default(uuid())
-  nombre     String
-  direccion  String?
-  creado_en  DateTime     @default(now())
-  updated_at DateTime     @updatedAt
+  id                    String       @id @default(uuid())
+  nombre                String
+  direccion             String?
+  creado_en             DateTime     @default(now())
+  updated_at            DateTime     @updatedAt
+  facturacionHabilitada Boolean      @default(false)
 
   stocks     StockTienda[]
   ventas     Venta[]
@@ -174,11 +175,12 @@ model Caja {
 }
 
 model ConfiguracionTienda {
-  id                Int     @id @default(1)
-  cuit              String
-  razonSocial       String
-  condicionFiscal   String  // MONOTRIBUTO, RESPONSABLE_INSCRIPTO
-  puntoVenta        Int
-  entornoProduccion Boolean @default(false)
-  recargos_credito  String  @default("{\"1\":0.05,\"2\":0.07,\"3\":0.10,\"6\":0.15}")
+  id                    Int     @id @default(1)
+  cuit                  String
+  razonSocial           String
+  condicionFiscal       String  // MONOTRIBUTO, RESPONSABLE_INSCRIPTO
+  puntoVenta            Int
+  entornoProduccion     Boolean @default(false)
+  facturacionHabilitada Boolean @default(false)
+  recargos_credito      String  @default("{\"1\":0.05,\"2\":0.07,\"3\":0.10,\"6\":0.15}")
 }
