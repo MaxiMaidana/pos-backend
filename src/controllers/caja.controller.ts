@@ -57,7 +57,10 @@ async function calcularResumenSesion(sesion_id: string, monto_inicial: number) {
   const totalRetiros  = movimientos.filter(m => m.tipo === 'RETIRO').reduce((s, m) => s + m.monto, 0);
   const totalIngresos = movimientos.filter(m => m.tipo === 'INGRESO').reduce((s, m) => s + m.monto, 0);
 
-  const efectivo_esperado = monto_inicial + efectivoVentas - totalRetiros + totalIngresos;
+  // En MODO_CAJA_SIMPLE el monto_inicial es un valor nominal fijo que nunca
+  // se cuenta físicamente — no debe sumarse al efectivo esperado en cajón.
+  const modoCajaSimple = process.env.MODO_CAJA_SIMPLE === 'true';
+  const efectivo_esperado = (modoCajaSimple ? 0 : monto_inicial) + efectivoVentas - totalRetiros + totalIngresos;
 
   return { resumenPagos, totalRecaudado, efectivoVentas, efectivo_esperado, totalRetiros, totalIngresos };
 }
