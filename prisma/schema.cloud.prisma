@@ -21,7 +21,7 @@ model Tienda {
   direccion             String?
   creado_en             DateTime     @default(now())
   updated_at            DateTime     @updatedAt
-  facturacionHabilitada Boolean      @default(false)
+  facturacionHabilitada Boolean      @default(false) @map("facturacion_habilitada")
 
   stocks     StockTienda[]
   ventas     Venta[]
@@ -186,4 +186,14 @@ model ConfiguracionTienda {
   facturacionHabilitada Boolean @default(false)
   recargos_credito              String  @default("{\"1\":0.05,\"2\":0.07,\"3\":0.10,\"6\":0.15}")
   transferenciaConsumidorFinal  Boolean @default(false)
+  colorPrimario                 String?
+}
+
+// Fila única compartida entre los 3 locales — branding común a toda la
+// cadena. Cada backend la empuja al guardar y la lee una sola vez al
+// arrancar (no hay polling periódico, ver src/index.ts).
+model ConfiguracionGlobal {
+  id             Int      @id @default(1)
+  colorPrimario  String?
+  updated_at     DateTime @updatedAt
 }

@@ -13,7 +13,7 @@ import { syncRoutes } from './routes/sync.routes.js';
 import { tiendaRoutes } from './routes/tienda.routes.js';
 import { vendedorRoutes } from './routes/vendedor.routes.js';
 import { configRoutes } from './routes/config.routes.js';
-import { syncVentasToCloud, syncProductosToCloud, syncCajasToCloud, syncSesionesCajaToCloud, syncStockTiendaToCloud, syncVendedoresToCloud, pullFromCloud } from './services/sync.service.js';
+import { syncVentasToCloud, syncProductosToCloud, syncCajasToCloud, syncSesionesCajaToCloud, syncStockTiendaToCloud, syncVendedoresToCloud, pullFromCloud, pullColorGlobalOnce } from './services/sync.service.js';
 import { authHook } from './plugins/auth.plugin.js';
 import { authRoutes } from './routes/auth.routes.js';
 
@@ -105,6 +105,10 @@ const start = async () => {
       console.info('[SYNC] 🏁 Ciclo de sincronización finalizado.');
     }, SYNC_INTERVAL_MS);
     fastify.log.info(`☁️  Sync worker iniciado. Sincronizando cada ${SYNC_INTERVAL_MS / 1000}s.`);
+
+    // Branding compartido entre locales: se chequea una sola vez al arrancar,
+    // no en el loop — ver pullColorGlobalOnce para el porqué.
+    await pullColorGlobalOnce();
 
     await fastify.listen({ port: 3000, host: '0.0.0.0' });
   } catch (err) {

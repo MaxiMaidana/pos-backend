@@ -2,6 +2,38 @@ import { prisma } from '../db/prisma.js';
 import { supabase } from '../db/supabase.js';
 import type { Producto, SesionCaja } from '@prisma/client';
 
+// ── PULL: Color de marca compartido entre locales (una sola vez, al arrancar) ──
+// No corre en el loop de sync — el branding cambia muy poco, así que alcanza con
+// chequear al iniciar el backend. Para que un local vea un color nuevo cambiado
+// en otro local, hay que reiniciar el programa en ese local.
+export async function pullColorGlobalOnce(): Promise<void> {
+  try {
+    const { data, error } = await supabase
+      .from('ConfiguracionGlobal')
+      .select('colorPrimario')
+      .eq('id', 1)
+      .maybeSingle();
+
+    if (error || !data?.colorPrimario) return;
+
+    await prisma.configuracionTienda.upsert({
+      where: { id: 1 },
+      update: { colorPrimario: data.colorPrimario },
+      create: {
+        id:              1,
+        cuit:            '00000000000',
+        razonSocial:     'Sin configurar',
+        condicionFiscal: 'MONOTRIBUTO',
+        puntoVenta:      1,
+        colorPrimario:   data.colorPrimario,
+      },
+    });
+    console.info('[SYNC] 🎨 Color de marca actualizado desde la nube.');
+  } catch (err) {
+    console.warn('[SYNC] ⚠️  No se pudo chequear el color de marca compartido (sin conexión?):', err);
+  }
+}
+
 // ── PUSH: Vendedores (local → nube) ──────────────────────────────────────────
 
 type VendedorRow = { id: string; nombre: string; activo: number; tienda_id: string; updated_at: Date };

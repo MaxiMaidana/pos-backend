@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../db/prisma.js';
+import { supabase } from '../db/supabase.js';
 
 const DEFAULT_RECARGOS: Record<string, number> = {
   '1': 0.05,
@@ -112,6 +113,7 @@ interface UpdateConfigBody {
   entornoProduccion?: boolean;
   facturacionHabilitada?: boolean;
   transferenciaConsumidorFinal?: boolean;
+  colorPrimario?: string;
 }
 
 async function updateConfig(
@@ -119,7 +121,7 @@ async function updateConfig(
   reply: FastifyReply,
 ) {
   try {
-    const { cuit, razonSocial, condicionFiscal, puntoVenta, entornoProduccion, facturacionHabilitada, transferenciaConsumidorFinal } = request.body;
+    const { cuit, razonSocial, condicionFiscal, puntoVenta, entornoProduccion, facturacionHabilitada, transferenciaConsumidorFinal, colorPrimario } = request.body;
 
     const config = await prisma.configuracionTienda.upsert({
       where: { id: 1 },
@@ -131,6 +133,7 @@ async function updateConfig(
         ...(entornoProduccion             !== undefined && { entornoProduccion }),
         ...(facturacionHabilitada         !== undefined && { facturacionHabilitada }),
         ...(transferenciaConsumidorFinal  !== undefined && { transferenciaConsumidorFinal }),
+        ...(colorPrimario                 !== undefined && { colorPrimario }),
       },
       create: {
         id:                           1,
@@ -141,8 +144,21 @@ async function updateConfig(
         entornoProduccion:            entornoProduccion     ?? false,
         facturacionHabilitada:        facturacionHabilitada ?? false,
         transferenciaConsumidorFinal: transferenciaConsumidorFinal ?? false,
+        colorPrimario:                colorPrimario ?? null,
       },
     });
+
+    // Propaga el color a los otros locales vía la nube — fire-and-forget,
+    // el guardado local ya está confirmado. Cada local lo toma recién al
+    // arrancar su backend (ver pullColorGlobal en index.ts), no hay polling.
+    if (colorPrimario !== undefined) {
+      supabase
+        .from('ConfiguracionGlobal')
+        .upsert({ id: 1, colorPrimario, updated_at: new Date().toISOString() })
+        .then(({ error }) => {
+          if (error) request.log.error({ error }, 'Error al propagar colorPrimario a la nube');
+        });
+    }
 
     return reply.send({
       ...config,
