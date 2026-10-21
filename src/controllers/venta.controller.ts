@@ -554,6 +554,7 @@ interface GetVentasQuery {
   fecha?:      string;
   vendedorId?: string;
   sesion_id?:  string;
+  search?:     string;
 }
 
 // Misma constante que el dashboard: Argentina es UTC-3 sin DST.
@@ -575,23 +576,25 @@ export async function getVentas(
   reply: FastifyReply
 ) {
   try {
-    const { id, estado, fecha, vendedorId, sesion_id } = request.query;
+    const { id, estado, fecha, vendedorId, sesion_id, search } = request.query;
 
     const page  = Math.max(1, parseInt(request.query.page  ?? '1',  10));
     const limit = Math.max(1, parseInt(request.query.limit ?? '30', 10));
     const skip  = (page - 1) * limit;
 
-    // Si viene un id exacto, devolvemos solo ese ticket (sin paginación necesaria).
+    // Si viene un id, puede ser el UUID completo o el hex corto de 8 que se
+    // muestra en pantalla (#DFE58B4F) — ese es un sufijo del UUID, no el id entero.
     if (id) {
-      const venta = await prisma.venta.findUnique({
-        where: { id },
-        include: {
-          detalles: { include: { producto: true } },
-          pagos:    true,
-          sesion:   { include: { caja: true } },
-          vendedor: true,
-        },
-      });
+      const esUuidCompleto = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+      const include = {
+        detalles: { include: { producto: true } },
+        pagos:    true,
+        sesion:   { include: { caja: true } },
+        vendedor: true,
+      };
+      const venta = esUuidCompleto
+        ? await prisma.venta.findUnique({ where: { id }, include })
+        : await prisma.venta.findFirst({ where: { id: { endsWith: id.toLowerCase() } }, include });
       if (!venta) return reply.status(404).send({ error: 'Venta no encontrada' });
       return reply.send({ data: [venta], meta: { total: 1, page: 1, limit: 1, totalPages: 1 } });
     }
@@ -608,6 +611,13 @@ export async function getVentas(
           : undefined,
       ...(vendedorId && { vendedorId }),
       ...(sesion_id  && { sesion_id }),
+      ...(search && {
+        OR: [
+          { vendedor: { nombre: { contains: search } } },
+          { sesion: { cajero_nombre: { contains: search } } },
+          { cliente_nombre: { contains: search } },
+        ],
+      }),
     };
 
     const [total, data] = await prisma.$transaction([
