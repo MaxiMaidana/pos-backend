@@ -2,35 +2,49 @@ import { prisma } from '../db/prisma.js';
 import { supabase } from '../db/supabase.js';
 import type { Producto, SesionCaja } from '@prisma/client';
 
-// ── PULL: Color de marca compartido entre locales (una sola vez, al arrancar) ──
-// No corre en el loop de sync — el branding cambia muy poco, así que alcanza con
-// chequear al iniciar el backend. Para que un local vea un color nuevo cambiado
-// en otro local, hay que reiniciar el programa en ese local.
-export async function pullColorGlobalOnce(): Promise<void> {
+const COMERCIO_ID = process.env.COMERCIO_ID;
+if (!COMERCIO_ID) {
+  throw new Error('[CONFIG] La variable de entorno COMERCIO_ID no está configurada.');
+}
+
+// ── PULL: Branding + identidad fiscal compartidos entre locales (una sola vez, al arrancar) ──
+// No corre en el loop de sync — estos datos cambian muy poco, así que alcanza con
+// chequear al iniciar el backend. Para que un local vea un cambio hecho en otro
+// local, hay que reiniciar el programa en ese local. puntoVenta queda afuera a
+// propósito: es un dato por local, no se sincroniza.
+export async function pullConfiguracionGlobalOnce(): Promise<void> {
   try {
     const { data, error } = await supabase
       .from('ConfiguracionGlobal')
-      .select('colorPrimario')
-      .eq('id', 1)
+      .select('colorPrimario, cuit, razonSocial, condicionFiscal')
+      .eq('comercio_id', COMERCIO_ID)
       .maybeSingle();
 
-    if (error || !data?.colorPrimario) return;
+    if (error || !data) return;
+
+    const updateData: Record<string, string> = {};
+    if (data.colorPrimario  != null) updateData.colorPrimario  = data.colorPrimario;
+    if (data.cuit            != null) updateData.cuit           = data.cuit;
+    if (data.razonSocial     != null) updateData.razonSocial    = data.razonSocial;
+    if (data.condicionFiscal != null) updateData.condicionFiscal = data.condicionFiscal;
+
+    if (Object.keys(updateData).length === 0) return;
 
     await prisma.configuracionTienda.upsert({
       where: { id: 1 },
-      update: { colorPrimario: data.colorPrimario },
+      update: updateData,
       create: {
         id:              1,
-        cuit:            '00000000000',
-        razonSocial:     'Sin configurar',
-        condicionFiscal: 'MONOTRIBUTO',
+        cuit:            data.cuit            ?? '00000000000',
+        razonSocial:     data.razonSocial     ?? 'Sin configurar',
+        condicionFiscal: data.condicionFiscal ?? 'MONOTRIBUTO',
         puntoVenta:      1,
-        colorPrimario:   data.colorPrimario,
+        colorPrimario:   data.colorPrimario   ?? null,
       },
     });
-    console.info('[SYNC] 🎨 Color de marca actualizado desde la nube.');
+    console.info('[SYNC] 🎨 Branding/datos fiscales actualizados desde la nube.');
   } catch (err) {
-    console.warn('[SYNC] ⚠️  No se pudo chequear el color de marca compartido (sin conexión?):', err);
+    console.warn('[SYNC] ⚠️  No se pudo chequear la config compartida (sin conexión?):', err);
   }
 }
 
@@ -117,6 +131,7 @@ export async function syncProductosToCloud(): Promise<void> {
     try {
       const { error } = await supabase.from('Producto').upsert({
         id:            producto.id,
+        comercio_id:   producto.comercio_id,
         codigo_barras: producto.codigo_barras,
         nombre:        producto.nombre,
         precio_actual: producto.precio_actual,
@@ -240,6 +255,7 @@ export async function syncVentasToCloud(): Promise<void> {
         const { error: eCaja } = await supabase.from('Caja').upsert({
           id: venta.sesion.caja.id,
           nombre: venta.sesion.caja.nombre,
+          tienda_id: venta.sesion.caja.tienda_id,
         });
         if (eCaja) throw new Error(`Caja upsert: ${eCaja.message}`);
 
@@ -321,12 +337,12 @@ export async function syncVentasToCloud(): Promise<void> {
 }
 
 export async function syncCajasToCloud(): Promise<void> {
-  let cajas: { id: string; nombre: string }[] = [];
+  let cajas: { id: string; nombre: string; tienda_id: string }[] = [];
 
   try {
     // Caja no tiene updated_at (nunca se modifica tras crearse), alcanza con synced_at IS NULL
-    cajas = await prisma.$queryRaw<{ id: string; nombre: string }[]>`
-      SELECT id, nombre FROM "Caja" WHERE synced_at IS NULL
+    cajas = await prisma.$queryRaw<{ id: string; nombre: string; tienda_id: string }[]>`
+      SELECT id, nombre, tienda_id FROM "Caja" WHERE synced_at IS NULL
     `;
   } catch (err) {
     console.error('[SYNC] ❌ ERROR CRÍTICO al leer cajas pendientes desde la BD local:', err instanceof Error ? err.message : err);
@@ -345,8 +361,9 @@ export async function syncCajasToCloud(): Promise<void> {
   for (const caja of cajas) {
     try {
       const { error } = await supabase.from('Caja').upsert({
-        id:     caja.id,
-        nombre: caja.nombre,
+        id:        caja.id,
+        nombre:    caja.nombre,
+        tienda_id: caja.tienda_id,
       });
       if (error) throw new Error(error.message);
 
@@ -470,6 +487,7 @@ async function pullTiendasFromCloud(): Promise<number> {
   const { data, error } = await supabase
     .from('Tienda')
     .select('id, nombre, direccion, creado_en, updated_at, facturacion_habilitada')
+    .eq('comercio_id', COMERCIO_ID)
     .order('updated_at', { ascending: true });
 
   if (error) throw new Error(`Pull Tiendas: ${error.message}`);
@@ -485,8 +503,8 @@ async function pullTiendasFromCloud(): Promise<number> {
     data.map((t) => {
       const facturacion = t.facturacion_habilitada ?? false;
       return prisma.$executeRaw`
-        INSERT INTO "Tienda" (id, nombre, direccion, creado_en, updated_at, facturacionHabilitada)
-        VALUES (${t.id}, ${t.nombre}, ${t.direccion ?? null}, ${new Date(t.creado_en)}, ${new Date(t.updated_at)}, ${facturacion})
+        INSERT INTO "Tienda" (id, comercio_id, nombre, direccion, creado_en, updated_at, facturacionHabilitada)
+        VALUES (${t.id}, ${COMERCIO_ID}, ${t.nombre}, ${t.direccion ?? null}, ${new Date(t.creado_en)}, ${new Date(t.updated_at)}, ${facturacion})
         ON CONFLICT(id) DO UPDATE SET
           nombre                = excluded.nombre,
           direccion             = excluded.direccion,
@@ -523,6 +541,7 @@ async function pullProductosFromCloud(): Promise<void> {
   const { data, error } = await supabase
     .from('Producto')
     .select('id, codigo_barras, nombre, precio_actual, activo, eliminado, updated_at')
+    .eq('comercio_id', COMERCIO_ID)
     .gt('updated_at', cursor)
     .order('updated_at', { ascending: true })
     .limit(100);
@@ -543,9 +562,10 @@ async function pullProductosFromCloud(): Promise<void> {
       const updatedAt = new Date(p.updated_at);
       if (updatedAt > newCursor) newCursor = updatedAt;
       return prisma.$executeRaw`
-        INSERT INTO "Producto" (id, codigo_barras, nombre, precio_actual, activo, eliminado, updated_at, synced_at)
+        INSERT INTO "Producto" (id, comercio_id, codigo_barras, nombre, precio_actual, activo, eliminado, updated_at, synced_at)
         VALUES (
           ${p.id},
+          ${COMERCIO_ID},
           ${p.codigo_barras ?? null},
           ${p.nombre},
           ${p.precio_actual},
@@ -578,13 +598,14 @@ async function pullProductosFromCloud(): Promise<void> {
  *
  * Conflicto por (producto_id, tienda_id) porque es la clave de negocio real.
  */
-async function pullStockTiendaFromCloud(): Promise<void> {
+async function pullStockTiendaFromCloud(tiendaIds: string[]): Promise<void> {
   const cursor = toSupabaseCursor(lastStockPullAt);
   console.info(`[SYNC] 🔍 Pull StockTienda: buscando cambios desde ${cursor} (hora local)`);
 
   const { data, error } = await supabase
     .from('StockTienda')
     .select('id, producto_id, tienda_id, cantidad, updated_at')
+    .in('tienda_id', tiendaIds)
     .gt('updated_at', cursor)
     .order('updated_at', { ascending: true })
     .limit(1000);
@@ -646,10 +667,11 @@ async function pullStockTiendaFromCloud(): Promise<void> {
  * Full sync (como Tiendas): los vendedores son pocos y deben estar
  * completos localmente para que las FKs de Venta funcionen offline.
  */
-async function pullVendedoresFromCloud(): Promise<void> {
+async function pullVendedoresFromCloud(tiendaIds: string[]): Promise<void> {
   const { data, error } = await supabase
     .from('Vendedor')
     .select('id, nombre, activo, tienda_id, updated_at')
+    .in('tienda_id', tiendaIds)
     .order('updated_at', { ascending: true });
 
   if (error) throw new Error(`Pull Vendedores: ${error.message}`);
@@ -701,16 +723,20 @@ export async function pullFromCloud(): Promise<void> {
     }
     console.info(`[SYNC] ⬇️  ${tiendas} tienda(s) cacheadas localmente.`);
 
+    // Tiendas de ESTE comercio ya cacheadas localmente — se usan para que
+    // Vendedores y StockTienda nunca traigan filas de otro comercio.
+    const tiendaIds = (await prisma.tienda.findMany({ select: { id: true } })).map((t) => t.id);
+
     // ── Paso 2: Productos (cursor independiente lastProductPullAt) ────────────
     await pullProductosFromCloud();
 
     // ── Paso 2.5: Vendedores (full sync, pocas filas) ─────────────────────────
-    await pullVendedoresFromCloud();
+    await pullVendedoresFromCloud(tiendaIds);
 
     // ── Paso 3: StockTienda (cursor independiente lastStockPullAt) ────────────
     // Cursores separados: el timestamp del último producto nunca puede
     // "adelantar" el cursor de stock y ocultar stocks más antiguos.
-    await pullStockTiendaFromCloud();
+    await pullStockTiendaFromCloud(tiendaIds);
 
     console.info('[SYNC] ✅ Pull completado.');
   } catch (err) {

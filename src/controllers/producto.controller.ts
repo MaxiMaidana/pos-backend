@@ -7,6 +7,11 @@ if (!TIENDA_LOCAL_ID) {
   throw new Error('[CONFIG] La variable de entorno TIENDA_LOCAL_ID no está configurada.');
 }
 
+const COMERCIO_ID = process.env.COMERCIO_ID;
+if (!COMERCIO_ID) {
+  throw new Error('[CONFIG] La variable de entorno COMERCIO_ID no está configurada.');
+}
+
 // ── Tipos ─────────────────────────────────────────────────────────────────────
 
 type ProductoConStocks = Prisma.ProductoGetPayload<{ include: { stocks: true } }>;
@@ -77,19 +82,29 @@ interface GetProductosQuery {
 }
 
 // ── Helper ────────────────────────────────────────────────────────────────────
-// Expone stock_local (tienda propia) y stock_otro (suma de todas las demás)
-// para que el frontend no tenga que iterar el array de stocks.
-function mapProductoConStock(p: ProductoConStocks) {
-  let stock_local = 0;
-  let stock_otro  = 0;
-  for (const s of p.stocks) {
-    if (s.tienda_id === TIENDA_LOCAL_ID) {
-      stock_local = s.cantidad;
-    } else {
-      stock_otro += s.cantidad;
-    }
-  }
-  return { ...p, stock_local, stock_otro };
+// Expone stock_local (tienda propia) y stock_por_local (desglose por cada
+// local del comercio, incluyendo los que todavía no tienen registro de
+// stock) para que el frontend muestre una columna por local, sin importar
+// cuántos locales tenga el comercio.
+type TiendaLite = { id: string; nombre: string };
+
+function mapProductoConStock(p: ProductoConStocks, tiendas: TiendaLite[]) {
+  const stockPorTiendaId = new Map(p.stocks.map((s) => [s.tienda_id, s.cantidad]));
+  const stock_local = stockPorTiendaId.get(TIENDA_LOCAL_ID!) ?? 0;
+  const stock_por_local = tiendas.map((t) => ({
+    tienda_id:     t.id,
+    tienda_nombre: t.nombre,
+    cantidad:      stockPorTiendaId.get(t.id) ?? 0,
+  }));
+  return { ...p, stock_local, stock_por_local };
+}
+
+async function getTiendasDelComercio(): Promise<TiendaLite[]> {
+  return prisma.tienda.findMany({
+    where:   { comercio_id: COMERCIO_ID },
+    select:  { id: true, nombre: true },
+    orderBy: { nombre: 'asc' },
+  });
 }
 
 // ── Controladores ─────────────────────────────────────────────────────────────
@@ -115,7 +130,8 @@ export async function getProductos(
           FROM "Producto" p
           LEFT JOIN "StockTienda" st
             ON st.producto_id = p.id AND st.tienda_id = ${tienda_id}
-          WHERE p.activo = true
+          WHERE p.comercio_id = ${COMERCIO_ID}
+            AND p.activo = true
             AND p.eliminado = false
             AND (st.cantidad IS NULL OR st.cantidad <= p.stock_minimo)
         `;
@@ -123,8 +139,7 @@ export async function getProductos(
       } else {
         // Vista global: un producto aparece si en AL MENOS UNA tienda tiene stock bajo
         // o le falta el registro de stock en alguna tienda activa.
-        const tiendas = await prisma.tienda.findMany({ select: { id: true } });
-        const totalTiendas = tiendas.length;
+        const totalTiendas = (await getTiendasDelComercio()).length;
 
         if (totalTiendas === 0) {
           stockBajoIds = [];
@@ -132,7 +147,8 @@ export async function getProductos(
           const rows = await prisma.$queryRaw<{ id: string }[]>`
             SELECT p.id
             FROM "Producto" p
-            WHERE p.activo = true
+            WHERE p.comercio_id = ${COMERCIO_ID}
+              AND p.activo = true
               AND p.eliminado = false
               AND (
                 EXISTS (
@@ -162,7 +178,8 @@ export async function getProductos(
             FROM "Producto" p
             LEFT JOIN "StockTienda" st
               ON st.producto_id = p.id AND st.tienda_id = ${tienda_id}
-            WHERE p.eliminado = false
+            WHERE p.comercio_id = ${COMERCIO_ID}
+              AND p.eliminado = false
               AND COALESCE(st.cantidad, 0) = ${cantidad}
           `;
           stockExactoIds = rows.map(r => r.id);
@@ -172,7 +189,8 @@ export async function getProductos(
             SELECT p.id
             FROM "Producto" p
             LEFT JOIN "StockTienda" st ON st.producto_id = p.id
-            WHERE p.eliminado = false
+            WHERE p.comercio_id = ${COMERCIO_ID}
+              AND p.eliminado = false
             GROUP BY p.id
             HAVING COALESCE(SUM(st.cantidad), 0) = ${cantidad}
           `;
@@ -182,6 +200,7 @@ export async function getProductos(
     }
 
     const where: Prisma.ProductoWhereInput = {
+      comercio_id: COMERCIO_ID,
       eliminado: false,
       ...(soloActivos === 'true' && { activo: true }),
       ...(search && {
@@ -199,7 +218,7 @@ export async function getProductos(
       ...(stockExactoIds !== undefined && { id: { in: stockExactoIds } }),
     };
 
-    const [total, data] = await prisma.$transaction([
+    const [total, data, tiendas] = await prisma.$transaction([
       prisma.producto.count({ where }),
       prisma.producto.findMany({
         where,
@@ -208,10 +227,15 @@ export async function getProductos(
         orderBy: { nombre: 'asc' },
         include: { stocks: true },
       }),
+      prisma.tienda.findMany({
+        where:   { comercio_id: COMERCIO_ID },
+        select:  { id: true, nombre: true },
+        orderBy: { nombre: 'asc' },
+      }),
     ]);
 
     return reply.send({
-      data: data.map(mapProductoConStock),
+      data: data.map((p) => mapProductoConStock(p, tiendas)),
       meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
     });
   } catch (error) {
@@ -233,6 +257,7 @@ export async function createProducto(
           nombre,
           precio_actual,
           codigo_barras,
+          comercio_id:          COMERCIO_ID!,
           costo:                costo                ?? 0,
           marca:                marca                ?? null,
           categoria:            categoria            ?? null,
@@ -254,7 +279,8 @@ export async function createProducto(
       });
     });
 
-    return reply.status(201).send(mapProductoConStock(producto!));
+    const tiendas = await getTiendasDelComercio();
+    return reply.status(201).send(mapProductoConStock(producto!, tiendas));
   } catch (error) {
     request.log.error(error);
     return reply.status(500).send({ error: 'Error al crear el producto' });
@@ -271,7 +297,7 @@ export async function updateProducto(
 
     const producto = await prisma.$transaction(async (tx) => {
       await tx.producto.update({
-        where: { id },
+        where: { id, comercio_id: COMERCIO_ID },
         data: {
           ...(nombre               !== undefined && { nombre }),
           ...(precio_actual        !== undefined && { precio_actual }),
@@ -301,7 +327,8 @@ export async function updateProducto(
       });
     });
 
-    return reply.send(mapProductoConStock(producto!));
+    const tiendas = await getTiendasDelComercio();
+    return reply.send(mapProductoConStock(producto!, tiendas));
   } catch (error) {
     request.log.error(error);
     return reply.status(500).send({ error: 'Error al actualizar el producto' });
@@ -315,7 +342,7 @@ export async function deleteProducto(
   try {
     const { id } = request.params;
     const producto = await prisma.producto.update({
-      where: { id },
+      where: { id, comercio_id: COMERCIO_ID },
       data:  { eliminado: true, synced_at: null },
     });
     return reply.send(producto);
@@ -332,13 +359,13 @@ export async function toggleActivo(
   try {
     const { id } = request.params;
 
-    const producto = await prisma.producto.findUnique({ where: { id } });
+    const producto = await prisma.producto.findFirst({ where: { id, comercio_id: COMERCIO_ID } });
     if (!producto) {
       return reply.status(404).send({ error: 'Producto no encontrado' });
     }
 
     const actualizado = await prisma.producto.update({
-      where: { id },
+      where: { id, comercio_id: COMERCIO_ID },
       data:  { activo: !producto.activo, synced_at: null },
     });
 
@@ -454,7 +481,7 @@ export async function importarProductos(
           if (p.codigo_barras) {
             // Con código de barras: upsert (actualiza catálogo si ya existía)
             const existente = await tx.producto.findUnique({
-              where:  { codigo_barras: p.codigo_barras },
+              where:  { comercio_id_codigo_barras: { comercio_id: COMERCIO_ID!, codigo_barras: p.codigo_barras } },
               select: { id: true },
             });
 
@@ -480,6 +507,7 @@ export async function importarProductos(
                   nombre:        p.nombre,
                   precio_actual: p.precio_actual,
                   codigo_barras: p.codigo_barras,
+                  comercio_id:   COMERCIO_ID!,
                   costo:         p.costo,
                   marca:         p.marca,
                   categoria:     p.categoria,
@@ -499,6 +527,7 @@ export async function importarProductos(
               data: {
                 nombre:        p.nombre,
                 precio_actual: p.precio_actual,
+                comercio_id:   COMERCIO_ID!,
                 costo:         p.costo,
                 marca:         p.marca,
                 categoria:     p.categoria,
@@ -552,7 +581,7 @@ export async function exportarProductos(
 ) {
   try {
     const productos = await prisma.producto.findMany({
-      where:   { eliminado: false },
+      where:   { comercio_id: COMERCIO_ID, eliminado: false },
       orderBy: { nombre: 'asc' },
       include: { stocks: { where: { tienda_id: TIENDA_LOCAL_ID! } } },
     });

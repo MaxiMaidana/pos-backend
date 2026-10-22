@@ -2,6 +2,11 @@ import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { prisma } from '../db/prisma.js';
 import { supabase } from '../db/supabase.js';
 
+const COMERCIO_ID = process.env.COMERCIO_ID;
+if (!COMERCIO_ID) {
+  throw new Error('[CONFIG] La variable de entorno COMERCIO_ID no está configurada.');
+}
+
 const DEFAULT_RECARGOS: Record<string, number> = {
   '1': 0.05,
   '2': 0.07,
@@ -148,15 +153,23 @@ async function updateConfig(
       },
     });
 
-    // Propaga el color a los otros locales vía la nube — fire-and-forget,
-    // el guardado local ya está confirmado. Cada local lo toma recién al
-    // arrancar su backend (ver pullColorGlobal en index.ts), no hay polling.
-    if (colorPrimario !== undefined) {
+    // Propaga color/identidad fiscal a los otros locales del mismo comercio
+    // vía la nube — fire-and-forget, el guardado local ya está confirmado.
+    // puntoVenta queda afuera a propósito: es un dato por local, no del
+    // comercio. Cada local lo toma recién al arrancar su backend (ver
+    // pullConfiguracionGlobalOnce en index.ts), no hay polling.
+    if (colorPrimario !== undefined || cuit !== undefined || razonSocial !== undefined || condicionFiscal !== undefined) {
+      const payloadGlobal: Record<string, unknown> = { comercio_id: COMERCIO_ID, updated_at: new Date().toISOString() };
+      if (colorPrimario   !== undefined) payloadGlobal.colorPrimario   = colorPrimario;
+      if (cuit             !== undefined) payloadGlobal.cuit            = cuit;
+      if (razonSocial      !== undefined) payloadGlobal.razonSocial     = razonSocial;
+      if (condicionFiscal  !== undefined) payloadGlobal.condicionFiscal = condicionFiscal;
+
       supabase
         .from('ConfiguracionGlobal')
-        .upsert({ id: 1, colorPrimario, updated_at: new Date().toISOString() })
+        .upsert(payloadGlobal)
         .then(({ error }) => {
-          if (error) request.log.error({ error }, 'Error al propagar colorPrimario a la nube');
+          if (error) request.log.error({ error }, 'Error al propagar config global a la nube');
         });
     }
 

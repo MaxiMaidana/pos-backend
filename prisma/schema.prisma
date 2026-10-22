@@ -7,6 +7,15 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+model Comercio {
+  id        String   @id @default(uuid())
+  nombre    String
+  creado_en DateTime @default(now())
+
+  tiendas   Tienda[]
+  productos Producto[]
+}
+
 model Tienda {
   id                    String       @id @default(uuid())
   nombre                String
@@ -15,10 +24,14 @@ model Tienda {
   updated_at            DateTime     @updatedAt
   facturacionHabilitada Boolean      @default(false)
 
+  comercio_id String
+  comercio    Comercio @relation(fields: [comercio_id], references: [id])
+
   stocks     StockTienda[]
   ventas     Venta[]
   sesiones   SesionCaja[]
   vendedores Vendedor[]
+  cajas      Caja[]
 }
 
 model Vendedor {
@@ -35,7 +48,7 @@ model Vendedor {
 
 model Producto {
   id              String        @id @default(uuid())
-  codigo_barras   String?       @unique
+  codigo_barras   String?
   nombre          String
   precio_actual   Float
   costo           Float         @default(0)
@@ -50,8 +63,13 @@ model Producto {
   updated_at           DateTime      @updatedAt @default(now())
   synced_at            DateTime?
 
+  comercio_id String
+  comercio    Comercio @relation(fields: [comercio_id], references: [id])
+
   detalles_ventas DetalleVenta[]
   stocks          StockTienda[]
+
+  @@unique([comercio_id, codigo_barras])
 }
 
 model StockTienda {
@@ -163,9 +181,14 @@ model MovimientoCaja {
 
 model Caja {
   id        String       @id @default(uuid())
-  nombre    String       @unique // Ej: "Caja 1", "Caja 2"
+  nombre    String       // Ej: "Caja 1", "Caja 2" — único por local, no global
   synced_at DateTime?
   sesiones  SesionCaja[]
+
+  tienda_id String
+  tienda    Tienda @relation(fields: [tienda_id], references: [id])
+
+  @@unique([tienda_id, nombre])
 }
 
 model ConfiguracionTienda {

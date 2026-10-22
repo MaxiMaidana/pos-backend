@@ -72,7 +72,7 @@ export async function abrirCaja(
   try {
     const { caja_id, cajero_nombre, monto_inicial } = request.body;
 
-    const caja = await prisma.caja.findUnique({ where: { id: caja_id } });
+    const caja = await prisma.caja.findFirst({ where: { id: caja_id, tienda_id: TIENDA_LOCAL_ID } });
     if (!caja) {
       return reply.status(404).send({ error: 'Caja no encontrada' });
     }
@@ -206,7 +206,7 @@ export async function getCajas(
   reply: FastifyReply
 ) {
   try {
-    const cajas = await prisma.caja.findMany();
+    const cajas = await prisma.caja.findMany({ where: { tienda_id: TIENDA_LOCAL_ID } });
     return reply.status(200).send(cajas);
   } catch (error) {
     request.log.error(error);
