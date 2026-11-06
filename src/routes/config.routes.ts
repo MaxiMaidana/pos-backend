@@ -119,6 +119,10 @@ interface UpdateConfigBody {
   facturacionHabilitada?: boolean;
   transferenciaConsumidorFinal?: boolean;
   colorPrimario?: string;
+  iibb?: string;
+  inicioActividad?: string;
+  domicilio?: string;
+  pieTicket?: string;
 }
 
 async function updateConfig(
@@ -126,7 +130,7 @@ async function updateConfig(
   reply: FastifyReply,
 ) {
   try {
-    const { cuit, razonSocial, condicionFiscal, puntoVenta, entornoProduccion, facturacionHabilitada, transferenciaConsumidorFinal, colorPrimario } = request.body;
+    const { cuit, razonSocial, condicionFiscal, puntoVenta, entornoProduccion, facturacionHabilitada, transferenciaConsumidorFinal, colorPrimario, iibb, inicioActividad, domicilio, pieTicket } = request.body;
 
     const config = await prisma.configuracionTienda.upsert({
       where: { id: 1 },
@@ -139,6 +143,10 @@ async function updateConfig(
         ...(facturacionHabilitada         !== undefined && { facturacionHabilitada }),
         ...(transferenciaConsumidorFinal  !== undefined && { transferenciaConsumidorFinal }),
         ...(colorPrimario                 !== undefined && { colorPrimario }),
+        ...(iibb                          !== undefined && { iibb }),
+        ...(inicioActividad               !== undefined && { inicioActividad }),
+        ...(domicilio                     !== undefined && { domicilio }),
+        ...(pieTicket                     !== undefined && { pieTicket }),
       },
       create: {
         id:                           1,
@@ -155,15 +163,15 @@ async function updateConfig(
 
     // Propaga color/identidad fiscal a los otros locales del mismo comercio
     // vía la nube — fire-and-forget, el guardado local ya está confirmado.
-    // puntoVenta queda afuera a propósito: es un dato por local, no del
-    // comercio. Cada local lo toma recién al arrancar su backend (ver
+    // puntoVenta y domicilio quedan afuera a propósito: son datos por local,
+    // no del comercio. Cada local lo toma recién al arrancar su backend (ver
     // pullConfiguracionGlobalOnce en index.ts), no hay polling.
-    if (colorPrimario !== undefined || cuit !== undefined || razonSocial !== undefined || condicionFiscal !== undefined) {
+    const camposGlobales = { colorPrimario, cuit, razonSocial, condicionFiscal, iibb, inicioActividad, pieTicket };
+    if (Object.values(camposGlobales).some((v) => v !== undefined)) {
       const payloadGlobal: Record<string, unknown> = { comercio_id: COMERCIO_ID, updated_at: new Date().toISOString() };
-      if (colorPrimario   !== undefined) payloadGlobal.colorPrimario   = colorPrimario;
-      if (cuit             !== undefined) payloadGlobal.cuit            = cuit;
-      if (razonSocial      !== undefined) payloadGlobal.razonSocial     = razonSocial;
-      if (condicionFiscal  !== undefined) payloadGlobal.condicionFiscal = condicionFiscal;
+      for (const [campo, valor] of Object.entries(camposGlobales)) {
+        if (valor !== undefined) payloadGlobal[campo] = valor;
+      }
 
       supabase
         .from('ConfiguracionGlobal')

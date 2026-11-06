@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { join, dirname } from 'path';
+import { join, dirname, sep } from 'path';
 import { fileURLToPath } from 'url';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
@@ -79,9 +79,30 @@ const start = async () => {
     const publicPath = join(__dirname, '..', 'public');
 
     await fastify.register(staticFiles, {
-      root:          publicPath,
-      prefix:        '/',
-      decorateReply: false,
+      root:   publicPath,
+      prefix: '/',
+      // decorateReply por defecto es true — hace falta para reply.sendFile()
+      // en el fallback de SPA de abajo. Si se pone en false, cualquier ruta
+      // de React Router (ej. /login) rompe con 500 "sendFile is not a function".
+      //
+      // cacheControl:false apaga el Cache-Control por defecto de la librería
+      // (public, max-age=0 en TODO archivo) — si no, pisa el que pone
+      // setHeaders de abajo: @fastify/static llama a setHeaders y DESPUÉS
+      // aplica sus propios headers encima, sin importar lo que haya puesto.
+      cacheControl: false,
+      setHeaders: (res, path) => {
+        // Los archivos de /assets/ llevan hash en el nombre (Vite los
+        // regenera en cada build) — se pueden cachear para siempre sin
+        // riesgo. index.html NO lleva hash: si el navegador lo cachea, un
+        // PC con el perfil del navegador persistente (el del kiosco de
+        // impresión) puede seguir mostrando una versión vieja de la app
+        // aunque el servidor ya tenga el build nuevo. Por eso nunca se cachea.
+        if (path.includes(`${sep}assets${sep}`)) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        } else {
+          res.setHeader('Cache-Control', 'no-cache');
+        }
+      },
     });
 
     // SPA fallback: cualquier ruta que no sea /api/* devuelve index.html

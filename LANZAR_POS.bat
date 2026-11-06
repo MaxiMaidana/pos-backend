@@ -47,8 +47,9 @@ REM Liberar el puerto 3000 si ya hay algo corriendo
 powershell -NoProfile -Command "Stop-Process -Id (Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue).OwningProcess -Force -ErrorAction SilentlyContinue" 2>nul
 timeout /t 1 /nobreak > nul
 
-REM Abrir el navegador despues de 3 segundos (en segundo plano)
-start "" cmd /c "timeout /t 3 /nobreak > nul && start http://localhost:3000"
+REM Abrir el navegador despues de 3 segundos, en modo kiosco de impresion
+REM (los tickets imprimen directo, sin la pantalla de impresion de Windows)
+start "" powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -Command "Start-Sleep -Seconds 3; & '%~dp0abrir_pos.ps1'"
 
 echo  Servidor iniciado. Accede desde:
 echo.

@@ -16,17 +16,16 @@ export async function pullConfiguracionGlobalOnce(): Promise<void> {
   try {
     const { data, error } = await supabase
       .from('ConfiguracionGlobal')
-      .select('colorPrimario, cuit, razonSocial, condicionFiscal')
+      .select('colorPrimario, cuit, razonSocial, condicionFiscal, iibb, inicioActividad, pieTicket')
       .eq('comercio_id', COMERCIO_ID)
       .maybeSingle();
 
     if (error || !data) return;
 
     const updateData: Record<string, string> = {};
-    if (data.colorPrimario  != null) updateData.colorPrimario  = data.colorPrimario;
-    if (data.cuit            != null) updateData.cuit           = data.cuit;
-    if (data.razonSocial     != null) updateData.razonSocial    = data.razonSocial;
-    if (data.condicionFiscal != null) updateData.condicionFiscal = data.condicionFiscal;
+    for (const campo of ['colorPrimario', 'cuit', 'razonSocial', 'condicionFiscal', 'iibb', 'inicioActividad', 'pieTicket'] as const) {
+      if (data[campo] != null) updateData[campo] = data[campo];
+    }
 
     if (Object.keys(updateData).length === 0) return;
 

@@ -4,6 +4,19 @@ import type { Prisma } from '@prisma/client';
 
 const TIENDA_LOCAL_ID = process.env.TIENDA_LOCAL_ID!;
 
+// El cajero espera este tiempo con la venta ya cobrada; pasado el límite se
+// marca ERROR y se reintenta desde el Historial, para no dejarlo colgado.
+const AFIP_TIMEOUT_MS = 20_000;
+
+function conTimeout<T>(promesa: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    promesa,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`AFIP no respondió en ${ms / 1000}s`)), ms)
+    ),
+  ]);
+}
+
 interface DetalleInput {
   producto_id: string;
   cantidad: number;
@@ -382,30 +395,44 @@ export async function cobrarVenta(
       });
     });
 
-    // Facturación ARCA: fire-and-forget; el cobro ya está confirmado
+    // Facturación ARCA: se espera la respuesta para poder imprimir el ticket
+    // fiscal con CAE y número de comprobante. Una falla de AFIP NUNCA revierte
+    // el cobro (la plata ya se cobró): la venta queda PAGADA con estado ERROR
+    // y se reintenta desde el Historial.
     if (facturar && tipoFactura) {
       const config = await prisma.configuracionTienda.findUnique({ where: { id: 1 } });
       if (config) {
-        emitirFactura(config, ventaCobrada.total, tipoFactura, compradorCuit)
-          .then((resultado) =>
-            prisma.venta.update({
-              where: { id },
-              data: {
-                estadoFacturacion: 'EMITIDA',
-                cae:               resultado.cae,
-                vencimientoCae:    resultado.vencimientoCae,
-                numeroFactura:     resultado.numeroFactura,
-                tipoFactura:       resultado.tipoFactura,
-              },
-            })
-          )
-          .catch((err) => {
-            request.log.error({ err }, 'Error ARCA al emitir factura para venta ' + id);
-            prisma.venta.update({
-              where: { id },
-              data: { estadoFacturacion: 'ERROR', errorFacturacion: String(err?.message ?? err) },
-            }).catch(() => {});
+        try {
+          const resultado = await conTimeout(
+            emitirFactura(config, ventaCobrada.total, tipoFactura, compradorCuit),
+            AFIP_TIMEOUT_MS,
+          );
+          const facturada = await prisma.venta.update({
+            where: { id },
+            data: {
+              estadoFacturacion: 'EMITIDA',
+              cae:               resultado.cae,
+              vencimientoCae:    resultado.vencimientoCae,
+              numeroFactura:     resultado.numeroFactura,
+              tipoFactura:       resultado.tipoFactura,
+              synced_at:         null,
+            },
+            include: { detalles: true, pagos: true },
           });
+          return reply.send(facturada);
+        } catch (err) {
+          request.log.error({ err }, 'Error ARCA al emitir factura para venta ' + id);
+          const conError = await prisma.venta.update({
+            where: { id },
+            data: {
+              estadoFacturacion: 'ERROR',
+              errorFacturacion:  String((err as Error)?.message ?? err),
+              synced_at:         null,
+            },
+            include: { detalles: true, pagos: true },
+          });
+          return reply.send(conError);
+        }
       }
     }
 

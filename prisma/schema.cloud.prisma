@@ -210,6 +210,11 @@ model ConfiguracionTienda {
   recargos_credito              String  @default("{\"1\":0.05,\"2\":0.07,\"3\":0.10,\"6\":0.15}")
   transferenciaConsumidorFinal  Boolean @default(false)
   colorPrimario                 String?
+
+  iibb            String?
+  inicioActividad String?
+  domicilio       String?
+  pieTicket       String?
 }
 
 // Una fila por comercio — datos comunes a todos los locales de ESE
@@ -223,5 +228,8 @@ model ConfiguracionGlobal {
   cuit            String?
   razonSocial     String?
   condicionFiscal String?
+  iibb            String?
+  inicioActividad String?
+  pieTicket       String?
   updated_at      DateTime @updatedAt
 }
